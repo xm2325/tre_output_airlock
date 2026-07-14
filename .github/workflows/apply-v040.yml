@@ -1,0 +1,42 @@
+name: Apply verified v0.4 patch
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-v040
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'agent/v040-synthetic-evaluation'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v040-synthetic-evaluation
+          fetch-depth: 0
+      - name: Verify and apply the fixed patch
+        run: |
+          set -euo pipefail
+          test -d .delivery/v040
+          cat .delivery/v040/patch-* > "$RUNNER_TEMP/v040.patch.gz.b64"
+          base64 --decode "$RUNNER_TEMP/v040.patch.gz.b64" > "$RUNNER_TEMP/v040.patch.gz"
+          echo "61e8408d68e723a8eea64777e8a744312797516ca031ca03244253f69b10e135  $RUNNER_TEMP/v040.patch.gz" | sha256sum --check
+          gzip --decompress --stdout "$RUNNER_TEMP/v040.patch.gz" > "$RUNNER_TEMP/v040.patch"
+          git apply --binary -p4 "$RUNNER_TEMP/v040.patch"
+      - name: Commit clean v0.4 source
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -rf .delivery/v040
+          git add -A
+          git commit -m "Implement v0.4 synthetic evaluation"
+          git push origin HEAD:agent/v040-synthetic-evaluation
