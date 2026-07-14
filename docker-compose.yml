@@ -1,0 +1,52 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: airlock
+      POSTGRES_USER: airlock
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-airlock-local-only}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airlock -d airlock"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  api:
+    build:
+      context: ./backend
+    environment:
+      AIRLOCK_DATABASE_URL: postgresql+psycopg://airlock:${POSTGRES_PASSWORD:-airlock-local-only}@db:5432/airlock
+      AIRLOCK_AUTO_CREATE_SCHEMA: "false"
+      AIRLOCK_QUARANTINE_DIR: /app/quarantine
+      AIRLOCK_CORS_ORIGINS: http://localhost:5173
+      AIRLOCK_REPORT_SIGNING_SECRET: ${AIRLOCK_REPORT_SIGNING_SECRET:-demo-signing-secret-change-me}
+      AIRLOCK_RETENTION_DAYS: ${AIRLOCK_RETENTION_DAYS:-30}
+    volumes:
+      - quarantine-data:/app/quarantine
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/ready')"]
+      interval: 10s
+      timeout: 3s
+      retries: 8
+
+  web:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://localhost:8000
+    ports:
+      - "5173:80"
+    depends_on:
+      api:
+        condition: service_healthy
+
+volumes:
+  postgres-data:
+  quarantine-data:

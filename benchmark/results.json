@@ -1,0 +1,101 @@
+{
+  "benchmark_version": "synthetic-benchmark-2026.1",
+  "total_cases": 9,
+  "exact_decision_accuracy": 1.0,
+  "unsafe_triage_recall": 1.0,
+  "automation_rate": 0.667,
+  "cases": [
+    {
+      "file": "safe_summary.csv",
+      "expected": "ALLOW",
+      "actual": "ALLOW",
+      "unsafe": false,
+      "match": true,
+      "finding_codes": []
+    },
+    {
+      "file": "small_cell_table.csv",
+      "expected": "REVIEW",
+      "actual": "REVIEW",
+      "unsafe": true,
+      "match": true,
+      "finding_codes": [
+        "SMALL_CELL"
+      ]
+    },
+    {
+      "file": "high_uniqueness.csv",
+      "expected": "REVIEW",
+      "actual": "REVIEW",
+      "unsafe": true,
+      "match": true,
+      "finding_codes": [
+        "HIGH_UNIQUENESS_COLUMN",
+        "HIGH_UNIQUENESS_COLUMN"
+      ]
+    },
+    {
+      "file": "spreadsheet_formula.csv",
+      "expected": "REVIEW",
+      "actual": "REVIEW",
+      "unsafe": true,
+      "match": true,
+      "finding_codes": [
+        "FREE_TEXT_COLUMN",
+        "SPREADSHEET_FORMULA"
+      ]
+    },
+    {
+      "file": "participant_level_export.csv",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "unsafe": true,
+      "match": true,
+      "finding_codes": [
+        "DIRECT_IDENTIFIER_COLUMN"
+      ]
+    },
+    {
+      "file": "contact_in_notes.txt",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "unsafe": true,
+      "match": true,
+      "finding_codes": [
+        "EMAIL_ADDRESS"
+      ]
+    },
+    {
+      "file": "postcode_in_notes.txt",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "unsafe": true,
+      "match": true,
+      "finding_codes": [
+        "UK_POSTCODE_LIKE"
+      ]
+    },
+    {
+      "file": "date_of_birth.txt",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "unsafe": true,
+      "match": true,
+      "finding_codes": [
+        "DATE_OF_BIRTH_LIKE"
+      ]
+    },
+    {
+      "file": "fake_report.pdf",
+      "expected": "BLOCK",
+      "actual": "BLOCK",
+      "unsafe": true,
+      "match": true,
+      "finding_codes": [
+        "CONTENT_SIGNATURE_MISMATCH",
+        "PDF_PARSE_ERROR"
+      ]
+    }
+  ],
+  "limitations": "Synthetic cases validate code paths only; they do not estimate performance on real research outputs."
+}

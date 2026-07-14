@@ -110,6 +110,7 @@ docs/adr/                        Recorded design decisions
 VALIDATION.md                    Reproducible local validation record
 ```
 
+
 ## Run with Docker
 
 ```bash
