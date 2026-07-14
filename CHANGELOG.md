@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 — 2026-07-14
+
+### Delivery reliability
+
+- Added a committed `uv.lock` and frozen Python dependency installation in CI and Docker.
+- Added a full Docker Compose integration job covering PostgreSQL, Alembic, FastAPI and the frontend container.
+- Added a GitHub Pages workflow for a browser-only synthetic demonstration.
+- Added frontend API contract tests for actor headers, optimistic concurrency errors and retention requests.
+- Avoided duplicate PDF and image parser findings when file signatures are already invalid.
+- Added CI and Pages badges plus a direct link to the browser-only demo.
+
 ## 0.3.0 — 2026-07-14
 
 ### Workflow and permissions
@@ -39,9 +50,10 @@
 ### Delivery
 
 - Added a nine-case synthetic benchmark and committed results.
-- Added OpenAPI schema generation in CI.
+- Added an OpenAPI snapshot and CI drift check.
 - Added migration smoke testing, dependency audits and container builds to CI.
 - Added an AWS encrypted quarantine and scan-queue baseline.
+- Removed all interview-specific material from the public repository.
 
 ## 0.2.0
 

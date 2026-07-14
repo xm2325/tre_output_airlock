@@ -1,5 +1,10 @@
 # TRE Output Airlock
 
+[![CI](https://github.com/xm2325/tre_output_airlock/actions/workflows/ci.yml/badge.svg)](https://github.com/xm2325/tre_output_airlock/actions/workflows/ci.yml)
+[![Pages demo](https://github.com/xm2325/tre_output_airlock/actions/workflows/pages.yml/badge.svg)](https://github.com/xm2325/tre_output_airlock/actions/workflows/pages.yml)
+
+[Open the browser-only synthetic demo](https://xm2325.github.io/tre_output_airlock/) · [Read the production-readiness gap analysis](docs/production-readiness.md)
+
 A production-minded full-stack portfolio demonstration of research-output checking before files leave a trusted research environment (TRE).
 
 > **Safety boundary:** this repository uses synthetic files and a demonstration policy. It is not affiliated with UK Biobank, does not implement UK Biobank policy, and must not be used with real participant data.
@@ -14,9 +19,17 @@ This project demonstrates that workflow through three outcomes:
 - `REVIEW`: a reviewer must claim the item and record a rationale;
 - `BLOCK`: a critical condition prevents release.
 
-## Version 0.3.0
+## Version 0.3.1
 
-This version adds:
+This delivery release adds:
+
+- reproducible Python environments through `uv.lock`;
+- a Docker Compose integration test across PostgreSQL, migrations, API and frontend;
+- a GitHub Pages browser-only synthetic demo;
+- frontend API contract tests;
+- quieter handling of invalid PDF and image signatures.
+
+The underlying v0.3 workflow includes:
 
 - researcher, reviewer and admin scopes;
 - researcher ownership filtering;
@@ -51,11 +64,15 @@ flowchart LR
   I --> J
 ```
 
+## Browser-only synthetic demo
+
+The GitHub Pages build runs entirely in the browser with synthetic in-memory records. It supports role switching, review claims, policy simulation, report verification and synthetic uploads without sending files to a server. The Docker deployment uses the real FastAPI and PostgreSQL services.
+
 ## Main capabilities
 
 ### Backend
 
-- FastAPI REST API and generated OpenAPI schema;
+- FastAPI REST API and committed OpenAPI snapshot;
 - streamed quarantine upload with a size limit and SHA-256 fingerprint;
 - file-signature, direct-identifier, quasi-identifier, small-cell, uniqueness, free-text, formula and metadata checks;
 - explicit, versioned rule-to-action policy;
@@ -82,15 +99,15 @@ flowchart LR
 
 ### Delivery evidence
 
-- 29 backend tests and a 90% coverage gate;
-- 4 frontend unit tests;
+- 31 backend tests and a 90% coverage gate;
+- 8 frontend unit and API contract tests;
 - Ruff, MyPy and TypeScript checks;
 - frontend production build;
 - npm and Python dependency-audit gates in CI;
 - migration smoke test;
-- OpenAPI schema generation check;
+- OpenAPI snapshot check;
 - synthetic benchmark check;
-- Docker Compose validation and image build.
+- Docker Compose validation, full-stack startup smoke test and image build.
 
 ## Repository structure
 
@@ -100,7 +117,7 @@ frontend/                        React + TypeScript dashboard and tests
 benchmark/                       Synthetic benchmark manifest and results
 samples/                         Synthetic ALLOW, REVIEW and BLOCK files
 infra/aws/                       Encrypted S3/SQS quarantine baseline
-scripts/export_openapi.py        OpenAPI schema generator
+scripts/export_openapi.py        OpenAPI snapshot generator and check
 docs/architecture.md             Runtime and production architecture
 docs/decision-policy.md          Rule, action and policy-change model
 docs/threat-model.md             Assets, abuse cases and controls
@@ -110,6 +127,7 @@ docs/adr/                        Recorded design decisions
 VALIDATION.md                    Reproducible local validation record
 ```
 
+Interview-specific notes are intentionally not included in this repository.
 
 ## Run with Docker
 
@@ -133,23 +151,21 @@ Backend with SQLite:
 
 ```bash
 cd backend
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[dev]'
-uvicorn app.main:app --reload
+uv sync --frozen --all-extras
+uv run uvicorn app.main:app --reload
 ```
 
 Frontend in another terminal:
 
 ```bash
 cd frontend
-npm install
+npm ci
 npm run dev
 ```
 
 ## Demo identity
 
-The browser lets the user switch between `researcher`, `reviewer` and `admin`. It sends `X-Demo-User` and `X-Demo-Role` headers. This is only a local demonstration of authorisation logic, not authentication.
+The Docker-backed browser lets the user switch between `researcher`, `reviewer` and `admin`. It sends `X-Demo-User` and `X-Demo-Role` headers. This is only a local demonstration of authorisation logic, not authentication.
 
 API example:
 

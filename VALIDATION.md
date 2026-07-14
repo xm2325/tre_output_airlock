@@ -8,9 +8,10 @@ Commands:
 
 ```bash
 cd backend
-python -m ruff check app tests alembic
-python -m mypy app
-python -m pytest --cov=app --cov-report=term-missing --cov-fail-under=90 -q
+uv sync --frozen --all-extras
+uv run ruff check app tests alembic
+uv run mypy app
+uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=90 -q
 ```
 
 Observed result:
@@ -18,8 +19,8 @@ Observed result:
 ```text
 Ruff: passed
 MyPy: passed
-Tests: 29 passed
-Coverage: 92.44%
+Tests: 31 passed
+Coverage: 91.75%
 Coverage requirement: 90%
 ```
 
@@ -29,7 +30,7 @@ Commands:
 
 ```bash
 cd frontend
-npm install --no-audit --no-fund
+npm ci
 npm run typecheck
 npm test
 npm run build
@@ -40,12 +41,26 @@ Observed result:
 
 ```text
 TypeScript: passed
-Vitest: 4 passed
+Vitest: 8 passed
 Vite production build: passed
 npm audit: 0 vulnerabilities
 ```
 
-The production bundle was generated successfully. The main JavaScript output was approximately 234 kB before gzip and 71 kB after gzip in this environment.
+The production bundle was generated successfully. The main JavaScript output was approximately 243 kB before gzip and 73 kB after gzip for the static demo build in this environment.
+
+## Reproducible dependency resolution
+
+The backend lock file was regenerated with `uv 0.10.0` and resolves 71 packages. Local validation used `uv sync --frozen --all-extras`, so the test environment was created from the committed lock file rather than resolving fresh dependency versions.
+
+## Static Pages build
+
+The browser-only demo build completed with:
+
+```bash
+VITE_DEMO_MODE=true VITE_BASE_PATH=/tre_output_airlock/ npm run build
+```
+
+The static mode stores synthetic records in memory and displays an explicit banner that no backend or real data is connected.
 
 ## Database migration
 
@@ -64,7 +79,7 @@ Command:
 
 ```bash
 cd backend
-PYTHONPATH=. python -m app.evaluation \
+PYTHONPATH=. uv run python -m app.evaluation \
   --manifest ../benchmark/manifest.json \
   --samples ../samples \
   --output ../benchmark/results.json
@@ -81,16 +96,16 @@ Automation rate: 0.667
 
 These results verify known synthetic code paths only. They do not estimate performance on real research outputs or prove disclosure-control safety.
 
-## OpenAPI schema generation
+## OpenAPI snapshot
 
-CI generates the FastAPI OpenAPI schema into a temporary file:
+The committed `docs/openapi.json` was generated from the FastAPI application. CI runs:
 
 ```bash
 cd backend
-python ../scripts/export_openapi.py --output /tmp/openapi.json
+uv run python ../scripts/export_openapi.py --check
 ```
 
-This verifies that the application can construct and serialise its API schema.
+This fails when API schemas change without a refreshed snapshot.
 
 ## Dependency audits
 
@@ -100,5 +115,8 @@ This verifies that the application can construct and serialise its API schema.
 
 ## Container validation
 
-Docker was not available in this execution environment, so containers were not started locally. The Compose file and workflow YAML were parsed, and CI includes both `docker compose config --quiet` and `docker compose build`.
+Docker was not available in this execution environment, so containers were not started locally. CI now starts PostgreSQL, runs Alembic, waits for FastAPI readiness, checks the policy endpoint and frontend, prints service logs on failure, and then removes the stack. The workflow also validates Compose and rebuilds the images.
 
+## Files excluded from public repository
+
+Interview scripts, role-specific answers, CV wording and personal preparation notes are stored in a separate interview pack and are not present in this repository.

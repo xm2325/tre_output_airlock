@@ -63,7 +63,7 @@ def claim(client: TestClient, submission_id: str, headers: dict[str, str] | None
 def test_health_readiness_identity_and_security_headers(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json()["version"] == "0.3.0"
+    assert response.json()["version"] == "0.3.1"
     assert response.json()["policy_version"] == "demo-policy-2026.2"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["x-frame-options"] == "DENY"

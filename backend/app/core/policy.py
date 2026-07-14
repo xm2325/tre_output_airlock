@@ -5,7 +5,7 @@ from typing import Literal
 
 PolicyAction = Literal["ALLOW", "REVIEW", "BLOCK"]
 
-API_VERSION = "0.3.0"
+API_VERSION = "0.3.1"
 POLICY_VERSION = "demo-policy-2026.2"
 
 

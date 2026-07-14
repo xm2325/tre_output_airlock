@@ -10,7 +10,7 @@ import { PolicyLab } from './components/PolicyLab'
 import { ReviewQueue } from './components/ReviewQueue'
 import { SubmissionTable } from './components/SubmissionTable'
 import { UploadPanel } from './components/UploadPanel'
-import { api, setApiActor } from './lib/api'
+import { api, isStaticDemo, setApiActor } from './lib/api'
 import type {
   Actor, DecisionReport, Metrics, Policy, PolicySimulationInput, SubmissionDetail,
   SubmissionFilters, SubmissionPage, SubmissionSummary, UploadMetadata,
@@ -105,9 +105,10 @@ function App() {
       <header className="topbar"><div className="brand-mark"><ShieldAlert /></div><div>
         <p className="eyebrow">Trusted research environment</p><h1>Output Airlock</h1></div>
         <div className="topbar__meta"><span className={`service-status ${error ? 'service-status--error' : ''}`}>
-          <i /> {error ? 'API attention required' : 'Service operational'}</span>
+          <i /> {error ? 'Service attention required' : isStaticDemo ? 'Static demo operational' : 'Service operational'}</span>
           <span>{policy?.policy_version ?? metrics.policy_version}</span></div></header>
       <main>
+        {isStaticDemo && <section className="demo-mode-banner" role="status"><strong>Static portfolio demo</strong><span>All records are synthetic and stored only in this browser session. No backend or real data is connected.</span></section>}
         <section className="hero"><div><p className="eyebrow">Release assurance workflow</p>
           <h2>Transparent checks, controlled review, verifiable decisions.</h2>
           <p>A production-minded demonstration of output checking before research files leave a controlled environment.</p></div>

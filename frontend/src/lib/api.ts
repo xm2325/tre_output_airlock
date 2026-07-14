@@ -1,4 +1,5 @@
 import { buildSubmissionQuery } from './query'
+import { createMockApi } from './mockApi'
 import type {
   Actor,
   AuditVerification,
@@ -41,7 +42,7 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return (await response.json()) as T
 }
 
-export const api = {
+const liveApi = {
   me: () => request<Actor>('/api/v1/me'),
   metrics: () => request<Metrics>('/api/v1/metrics'),
   policy: () => request<Policy>('/api/v1/policy'),
@@ -87,3 +88,6 @@ export const api = {
       body: JSON.stringify({ decision, rationale, expected_version: expectedVersion }),
     }),
 }
+
+export const isStaticDemo = import.meta.env.VITE_DEMO_MODE === 'true'
+export const api = isStaticDemo ? createMockApi(() => currentActor) : liveApi
