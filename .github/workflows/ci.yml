@@ -30,7 +30,21 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --frozen --all-extras
-      - run: uv run ruff check app tests alembic
+      - name: Ruff
+        id: ruff
+        shell: bash
+        run: |
+          set +e
+          uv run ruff check app tests alembic --output-format=json > "$RUNNER_TEMP/ruff.json"
+          status=$?
+          cat "$RUNNER_TEMP/ruff.json"
+          exit "$status"
+      - name: Upload Ruff diagnostics
+        if: failure() && steps.ruff.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruff-diagnostics
+          path: ${{ runner.temp }}/ruff.json
       - run: uv run mypy app
       - run: uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=90
       - name: Smoke-test database migration
@@ -67,6 +81,11 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Build the browser-only Pages demo
+        run: npm run build
+        env:
+          VITE_DEMO_MODE: "true"
+          VITE_BASE_PATH: /tre_output_airlock/
 
   compose-config:
     runs-on: ubuntu-latest
