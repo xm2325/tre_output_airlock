@@ -26,7 +26,10 @@ jobs:
 
       - name: Extract delivery files
         run: |
-          base64 --decode .delivery/payload.b64 > "$RUNNER_TEMP/delivery.tar.gz"
+          cat .delivery/part00 .delivery/part01 .delivery/part02 .delivery/part03 .delivery/part04 \
+            | base64 --decode > "$RUNNER_TEMP/delivery.tar.gz"
+          echo "2e1430af28d79a74a166fa8072834f169f909dd35caaac9c53422a8e063d5346  $RUNNER_TEMP/delivery.tar.gz" \
+            | sha256sum --check
           tar -xzf "$RUNNER_TEMP/delivery.tar.gz" -C .
 
       - uses: astral-sh/setup-uv@v6
