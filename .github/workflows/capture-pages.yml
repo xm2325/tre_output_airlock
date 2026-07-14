@@ -1,4 +1,4 @@
-name: Capture Pages screenshots
+name: Diagnose Pages deployment
 
 on:
   pull_request:
@@ -6,121 +6,37 @@ on:
       - ".github/workflows/capture-pages.yml"
 
 permissions:
+  actions: read
   contents: read
+  pages: read
 
 jobs:
-  capture:
+  diagnose:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-      - name: Install Playwright Chromium
-        run: |
-          mkdir -p "$RUNNER_TEMP/pages-capture"
-          cd "$RUNNER_TEMP/pages-capture"
-          npm init -y
-          npm install playwright@1.55.0
-          npx playwright install --with-deps chromium
-      - name: Probe deployed Pages URL
-        run: |
-          mkdir -p pages-screenshots
-          set +e
-          for attempt in 1 2 3; do
-            curl --location --silent --show-error --head \
-              --write-out "attempt=${attempt} status=%{http_code} effective_url=%{url_effective}\n" \
-              --output /dev/null \
-              https://xm2325.github.io/tre_output_airlock/ \
-              2>&1 | tee -a pages-screenshots/http-status.txt
-            sleep 3
-          done
-      - name: Capture deployed Pages demo
-        id: capture
-        continue-on-error: true
+      - name: Query Pages configuration
         env:
-          NODE_PATH: ${{ runner.temp }}/pages-capture/node_modules
+          GH_TOKEN: ${{ github.token }}
         run: |
-          node <<'NODE'
-          const { chromium } = require('playwright')
-          const fs = require('fs')
-          const siteUrl = 'https://xm2325.github.io/tre_output_airlock/'
+          mkdir -p pages-diagnostics
+          set +e
+          gh api "repos/${GITHUB_REPOSITORY}/pages" \
+            > pages-diagnostics/pages-config.json \
+            2> pages-diagnostics/pages-config.stderr
+          echo "$?" > pages-diagnostics/pages-config.exit-code
 
-          async function openWithRetry(page) {
-            let lastError
-            for (let attempt = 1; attempt <= 12; attempt += 1) {
-              try {
-                const response = await page.goto(
-                  `${siteUrl}?capture=${Date.now()}`,
-                  { waitUntil: 'networkidle', timeout: 30_000 },
-                )
-                if (response && response.ok()) return
-                lastError = new Error(`HTTP ${response ? response.status() : 'no response'}`)
-              } catch (error) {
-                lastError = error
-              }
-              console.log(`Pages not ready on attempt ${attempt}; retrying.`)
-              await page.waitForTimeout(10_000)
-            }
-            throw lastError
-          }
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/pages.yml/runs?per_page=20" \
+            > pages-diagnostics/pages-runs.json \
+            2> pages-diagnostics/pages-runs.stderr
+          echo "$?" > pages-diagnostics/pages-runs.exit-code
 
-          ;(async () => {
-            const browser = await chromium.launch({ headless: true })
-            const context = await browser.newContext({
-              viewport: { width: 1600, height: 1100 },
-              deviceScaleFactor: 1,
-            })
-            const page = await context.newPage()
-            await page.emulateMedia({ reducedMotion: 'reduce' })
-            await openWithRetry(page)
-            await page.getByText('Static portfolio demo', { exact: true }).waitFor({ timeout: 30_000 })
-            await page.addStyleTag({
-              content: '* { animation: none !important; transition: none !important; }',
-            })
-            await page.screenshot({
-              path: 'pages-screenshots/01-operations-dashboard.png',
-              fullPage: false,
-            })
-
-            await page.getByLabel('Role').selectOption('reviewer')
-            await page.locator('.queue-row').first().waitFor({ timeout: 20_000 })
-            const reviewGrid = page.locator('.dashboard-grid--secondary').first()
-            await reviewGrid.scrollIntoViewIfNeeded()
-            await reviewGrid.screenshot({
-              path: 'pages-screenshots/02-review-queue.png',
-            })
-
-            await page.locator('.queue-row').first().click()
-            const drawer = page.getByRole('dialog')
-            await drawer.waitFor({ timeout: 20_000 })
-            const claimButton = page.getByRole('button', { name: /Claim review/ })
-            if (await claimButton.isVisible()) {
-              await claimButton.click()
-              await page.getByText(/Claimed by/).waitFor({ timeout: 10_000 })
-            }
-            const templateButton = page.getByRole('button', { name: 'Use mitigation example' })
-            if (await templateButton.isEnabled()) await templateButton.click()
-            await drawer.evaluate((element) => { element.scrollTop = 0 })
-            await page.screenshot({
-              path: 'pages-screenshots/03-review-detail.png',
-              fullPage: false,
-            })
-            await browser.close()
-          })().catch((error) => {
-            const detail = error && error.stack ? error.stack : String(error)
-            fs.writeFileSync('pages-screenshots/capture-error.txt', detail)
-            console.error(detail)
-            process.exit(1)
-          })
-          NODE
-      - name: Upload Pages capture output
-        if: always()
-        uses: actions/upload-artifact@v4
+          curl --location --silent --show-error --head \
+            --write-out "status=%{http_code} effective_url=%{url_effective}\n" \
+            --output /dev/null \
+            https://xm2325.github.io/tre_output_airlock/ \
+            > pages-diagnostics/http-status.txt \
+            2>&1
+      - uses: actions/upload-artifact@v4
         with:
-          name: pages-screenshots
-          path: pages-screenshots/
-      - name: Fail when capture failed
-        if: steps.capture.outcome == 'failure'
-        run: exit 1
+          name: pages-deployment-diagnostics
+          path: pages-diagnostics/
