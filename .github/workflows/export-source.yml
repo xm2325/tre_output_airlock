@@ -1,4 +1,4 @@
-name: Export branch git metadata
+name: Diagnose v0.4 patch applicator
 
 on:
   pull_request:
@@ -6,24 +6,21 @@ on:
       - ".github/workflows/export-source.yml"
 
 permissions:
+  actions: read
   contents: read
 
 jobs:
-  export:
+  diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Read branch commit and tree
+      - name: Query applicator runs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          mkdir -p git-metadata
-          ref_json=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/agent/v040-synthetic-evaluation")
-          commit_sha=$(printf '%s' "$ref_json" | jq -r '.object.sha')
-          gh api "repos/${GITHUB_REPOSITORY}/git/commits/${commit_sha}" > git-metadata/commit.json
-          printf '%s\n' "$commit_sha" > git-metadata/commit-sha.txt
-          jq -r '.tree.sha' git-metadata/commit.json > git-metadata/tree-sha.txt
+          mkdir -p applicator-status
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/apply-v040.yml/runs?per_page=10" > applicator-status/runs.json
       - uses: actions/upload-artifact@v4
         with:
-          name: branch-git-metadata
-          path: git-metadata
+          name: v040-applicator-status
+          path: applicator-status/runs.json
