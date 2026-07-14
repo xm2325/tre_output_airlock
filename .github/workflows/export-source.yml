@@ -1,4 +1,4 @@
-name: Diagnose v0.4 patch applicator
+name: Diagnose v0.4 delivery payload
 
 on:
   pull_request:
@@ -6,21 +6,33 @@ on:
       - ".github/workflows/export-source.yml"
 
 permissions:
-  actions: read
   contents: read
 
 jobs:
   diagnose:
     runs-on: ubuntu-latest
     steps:
-      - name: Query applicator runs
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/v040-synthetic-evaluation
+          fetch-depth: 0
+      - name: Inspect payload and patch applicability
         run: |
-          set -euo pipefail
-          mkdir -p applicator-status
-          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/apply-v040.yml/runs?per_page=10" > applicator-status/runs.json
+          set +e
+          mkdir -p delivery-diagnostics
+          wc -c .delivery/v040/patch-* > delivery-diagnostics/chunk-sizes.txt
+          cat .delivery/v040/patch-* > "$RUNNER_TEMP/v040.patch.gz.b64"
+          wc -c "$RUNNER_TEMP/v040.patch.gz.b64" > delivery-diagnostics/combined-size.txt
+          base64 --decode "$RUNNER_TEMP/v040.patch.gz.b64" > "$RUNNER_TEMP/v040.patch.gz" 2> delivery-diagnostics/base64.stderr
+          echo "base64_status=$?" > delivery-diagnostics/status.txt
+          sha256sum "$RUNNER_TEMP/v040.patch.gz" > delivery-diagnostics/actual-sha256.txt
+          gzip --test "$RUNNER_TEMP/v040.patch.gz" 2> delivery-diagnostics/gzip.stderr
+          echo "gzip_status=$?" >> delivery-diagnostics/status.txt
+          gzip --decompress --stdout "$RUNNER_TEMP/v040.patch.gz" > "$RUNNER_TEMP/v040.patch" 2>> delivery-diagnostics/gzip.stderr
+          git apply --check --binary -p4 "$RUNNER_TEMP/v040.patch" > delivery-diagnostics/git-apply.stdout 2> delivery-diagnostics/git-apply.stderr
+          echo "git_apply_status=$?" >> delivery-diagnostics/status.txt
+          cp "$RUNNER_TEMP/v040.patch.gz.b64" delivery-diagnostics/recombined.b64
       - uses: actions/upload-artifact@v4
         with:
-          name: v040-applicator-status
-          path: applicator-status/runs.json
+          name: v040-delivery-diagnostics
+          path: delivery-diagnostics
