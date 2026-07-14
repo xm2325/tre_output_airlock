@@ -30,28 +30,31 @@ jobs:
           python - <<'PY'
           from pathlib import Path
 
-          path = Path('README.md')
-          text = path.read_text(encoding='utf-8')
-          if '## Product screenshots' not in text:
-              block = '''## Product screenshots
-
-### Researcher operations dashboard
-
-![TRE Output Airlock operations dashboard](docs/screenshots/01-operations-dashboard.png)
-
-### Risk-prioritised reviewer queue
-
-![TRE Output Airlock reviewer queue](docs/screenshots/02-review-queue.png)
-
-### Claimed review with evidence and decision controls
-
-![TRE Output Airlock submission review detail](docs/screenshots/03-review-detail.png)
-
-'''
-              anchor = '## Main capabilities'
+          path = Path("README.md")
+          text = path.read_text(encoding="utf-8")
+          heading = "## Product screenshots"
+          lines = [
+              heading,
+              "",
+              "### Researcher operations dashboard",
+              "",
+              "![TRE Output Airlock operations dashboard](docs/screenshots/01-operations-dashboard.png)",
+              "",
+              "### Risk-prioritised reviewer queue",
+              "",
+              "![TRE Output Airlock reviewer queue](docs/screenshots/02-review-queue.png)",
+              "",
+              "### Claimed review with evidence and decision controls",
+              "",
+              "![TRE Output Airlock submission review detail](docs/screenshots/03-review-detail.png)",
+              "",
+          ]
+          if heading not in text:
+              anchor = "## Main capabilities"
               if anchor not in text:
-                  raise SystemExit(f'README anchor not found: {anchor}')
-              path.write_text(text.replace(anchor, block + anchor, 1), encoding='utf-8')
+                  raise SystemExit(f"README anchor not found: {anchor}")
+              block = "\n".join(lines) + "\n"
+              path.write_text(text.replace(anchor, block + anchor, 1), encoding="utf-8")
           PY
       - name: Commit screenshot documentation
         run: |
