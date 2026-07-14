@@ -1,0 +1,39 @@
+name: Refresh patched pytest lock
+
+on:
+  push:
+    branches: [agent/delivery-v031-clean]
+    paths:
+      - ".github/workflows/refresh-pytest-lock.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/delivery-v031-clean
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Resolve and test patched dependencies
+        working-directory: backend
+        run: |
+          uv lock --upgrade-package pytest
+          uv sync --frozen --all-extras
+          uv run python -c 'import pytest; assert tuple(map(int, pytest.__version__.split(".")[:3])) >= (9, 0, 3)'
+          uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=90
+          uv run pip-audit
+      - name: Commit refreshed lock
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/uv.lock
+          git commit -m "Lock patched pytest release"
+          git push origin HEAD:agent/delivery-v031-clean
