@@ -1,2 +1,5 @@
-# Default review owner for this portfolio repository.
+# Default owner for application, policy and infrastructure changes.
 * @xm2325
+/backend/ @xm2325
+/frontend/ @xm2325
+/infra/ @xm2325
