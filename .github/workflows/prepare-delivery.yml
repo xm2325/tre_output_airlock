@@ -1,0 +1,69 @@
+name: Prepare v0.3.1 delivery
+
+on:
+  push:
+    branches: [agent/delivery-v031]
+    paths:
+      - ".delivery/**"
+      - ".github/workflows/prepare-delivery.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract delivery files
+        run: |
+          base64 --decode .delivery/payload.b64 > "$RUNNER_TEMP/delivery.tar.gz"
+          tar -xzf "$RUNNER_TEMP/delivery.tar.gz" -C .
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Lock and validate backend
+        working-directory: backend
+        run: |
+          uv lock
+          uv sync --frozen --all-extras
+          uv run ruff check app tests alembic
+          uv run mypy app
+          uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=90
+          uv run python ../scripts/export_openapi.py
+          uv run python ../scripts/export_openapi.py --check
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Refresh and validate frontend
+        working-directory: frontend
+        run: |
+          npm install --package-lock-only --ignore-scripts
+          npm ci
+          npm run typecheck
+          npm test
+          npm run build
+          VITE_DEMO_MODE=true VITE_BASE_PATH=/tre_output_airlock/ npm run build
+          npm audit --audit-level=high
+
+      - name: Commit release source
+        run: |
+          rm -rf .delivery
+          rm -f .github/workflows/prepare-delivery.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Upgrade delivery workflow to v0.3.1"
+          git push
