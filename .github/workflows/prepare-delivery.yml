@@ -57,10 +57,24 @@ jobs:
         working-directory: frontend
         run: npm install --package-lock-only --ignore-scripts
 
-      - name: Commit generated source without workflow files
+      - name: Stage release files
+        run: |
+          git add \
+            CHANGELOG.md Makefile README.md VALIDATION.md \
+            backend/Dockerfile backend/pyproject.toml backend/uv.lock \
+            backend/app/core/policy.py backend/app/rules/document_rules.py \
+            backend/tests/test_api.py backend/tests/test_rules.py \
+            docs/openapi.json \
+            frontend/package.json frontend/package-lock.json frontend/vite.config.ts \
+            frontend/src/App.tsx frontend/src/styles.css \
+            frontend/src/lib/api.ts frontend/src/lib/api.test.ts frontend/src/lib/mockApi.ts
+          git status --short
+
+      - name: Commit release files
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A -- ':!.delivery' ':!.github/workflows'
           git commit -m "Generate v0.3.1 source and dependency locks"
-          git push origin HEAD:agent/delivery-v031
+
+      - name: Push release files
+        run: git push origin HEAD:agent/delivery-v031
