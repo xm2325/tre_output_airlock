@@ -1,0 +1,105 @@
+name: Capture Pages screenshots
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/capture-pages.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install Playwright Chromium
+        run: |
+          mkdir -p "$RUNNER_TEMP/pages-capture"
+          cd "$RUNNER_TEMP/pages-capture"
+          npm init -y
+          npm install playwright@1.55.0
+          npx playwright install --with-deps chromium
+      - name: Capture deployed Pages demo
+        env:
+          NODE_PATH: ${{ runner.temp }}/pages-capture/node_modules
+        run: |
+          mkdir -p pages-screenshots
+          node <<'NODE'
+          const { chromium } = require('playwright')
+          const siteUrl = 'https://xm2325.github.io/tre_output_airlock/'
+
+          async function openWithRetry(page) {
+            let lastError
+            for (let attempt = 1; attempt <= 12; attempt += 1) {
+              try {
+                const response = await page.goto(
+                  `${siteUrl}?capture=${Date.now()}`,
+                  { waitUntil: 'networkidle', timeout: 30_000 },
+                )
+                if (response && response.ok()) return
+                lastError = new Error(`HTTP ${response ? response.status() : 'no response'}`)
+              } catch (error) {
+                lastError = error
+              }
+              console.log(`Pages not ready on attempt ${attempt}; retrying.`)
+              await page.waitForTimeout(10_000)
+            }
+            throw lastError
+          }
+
+          ;(async () => {
+            const browser = await chromium.launch({ headless: true })
+            const context = await browser.newContext({
+              viewport: { width: 1600, height: 1100 },
+              deviceScaleFactor: 1,
+            })
+            const page = await context.newPage()
+            await page.emulateMedia({ reducedMotion: 'reduce' })
+            await openWithRetry(page)
+            await page.getByText('Static portfolio demo', { exact: true }).waitFor({ timeout: 30_000 })
+            await page.addStyleTag({
+              content: '* { animation: none !important; transition: none !important; }',
+            })
+            await page.screenshot({
+              path: 'pages-screenshots/01-operations-dashboard.png',
+              fullPage: false,
+            })
+
+            await page.getByLabel('Role').selectOption('reviewer')
+            await page.locator('.queue-row').first().waitFor({ timeout: 20_000 })
+            const reviewGrid = page.locator('.dashboard-grid--secondary').first()
+            await reviewGrid.scrollIntoViewIfNeeded()
+            await reviewGrid.screenshot({
+              path: 'pages-screenshots/02-review-queue.png',
+            })
+
+            await page.locator('.queue-row').first().click()
+            const drawer = page.getByRole('dialog')
+            await drawer.waitFor({ timeout: 20_000 })
+            const claimButton = page.getByRole('button', { name: /Claim review/ })
+            if (await claimButton.isVisible()) {
+              await claimButton.click()
+              await page.getByText(/Claimed by/).waitFor({ timeout: 10_000 })
+            }
+            const templateButton = page.getByRole('button', { name: 'Use mitigation example' })
+            if (await templateButton.isEnabled()) await templateButton.click()
+            await drawer.evaluate((element) => { element.scrollTop = 0 })
+            await page.screenshot({
+              path: 'pages-screenshots/03-review-detail.png',
+              fullPage: false,
+            })
+            await browser.close()
+          })().catch((error) => {
+            console.error(error)
+            process.exit(1)
+          })
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pages-screenshots
+          path: pages-screenshots/*.png
