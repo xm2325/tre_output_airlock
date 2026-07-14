@@ -27,7 +27,8 @@ jobs:
       - name: Extract delivery files
         run: |
           cat .delivery/part00 .delivery/part01 .delivery/part02 \
-              .delivery/part030 .delivery/part031 .delivery/part032 .delivery/part033 \
+              .delivery/part030 .delivery/part031 .delivery/part032 \
+              .delivery/part0330 .delivery/part0331 .delivery/part0332 .delivery/part0333 \
               .delivery/part04 \
             | base64 --decode > "$RUNNER_TEMP/delivery.tar.gz"
           echo "2e1430af28d79a74a166fa8072834f169f909dd35caaac9c53422a8e063d5346  $RUNNER_TEMP/delivery.tar.gz" \
