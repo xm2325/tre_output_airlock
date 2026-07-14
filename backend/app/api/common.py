@@ -56,6 +56,7 @@ from app.services.checker import ACTION_PRIORITY, OutputChecker, decision_from_f
 from app.services.reports import build_report, verify_report
 from app.services.storage import FileTooLargeError, quarantined_path, store_quarantined_file
 
+
 def _request_id(request: Request) -> str | None:
     return getattr(request.state, "request_id", None)
 

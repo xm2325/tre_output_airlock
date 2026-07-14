@@ -90,3 +90,15 @@ def test_binary_text_file_requires_review(tmp_path: Path) -> None:
     result = check_file(tmp_path, "binary.txt", b"abc\x00def")
     assert result.decision == "REVIEW"
     assert any(item.code == "BINARY_TEXT_FILE" for item in result.findings)
+
+
+def test_invalid_pdf_signature_does_not_add_parser_noise(tmp_path: Path) -> None:
+    result = check_file(tmp_path, "fake.pdf", b"not-a-pdf")
+    codes = [item.code for item in result.findings]
+    assert codes == ["CONTENT_SIGNATURE_MISMATCH"]
+
+
+def test_invalid_image_signature_does_not_add_parser_noise(tmp_path: Path) -> None:
+    result = check_file(tmp_path, "fake.jpg", b"not-a-jpeg")
+    codes = [item.code for item in result.findings]
+    assert codes == ["CONTENT_SIGNATURE_MISMATCH"]

@@ -31,6 +31,11 @@ class PdfRule:
             return []
         findings: list[FindingResult] = []
         try:
+            # FileSignatureRule already creates the blocking finding. Avoid sending
+            # clearly invalid bytes into pypdf, which would add duplicate findings
+            # and noisy parser output without improving the decision.
+            if not context.path.read_bytes()[:5].startswith(b"%PDF-"):
+                return []
             reader = PdfReader(str(context.path))
             text_parts: list[str] = []
             for page in reader.pages[:20]:
@@ -64,6 +69,13 @@ class ImageMetadataRule:
             return []
         findings: list[FindingResult] = []
         try:
+            prefix = context.path.read_bytes()[:8]
+            suffix = context.path.suffix.lower()
+            valid_signature = (
+                suffix == ".png" and prefix.startswith(b"\x89PNG\r\n\x1a\n")
+            ) or (suffix in {".jpg", ".jpeg"} and prefix.startswith(b"\xff\xd8\xff"))
+            if not valid_signature:
+                return []
             with Image.open(context.path) as image:
                 exif = image.getexif()
                 if exif:

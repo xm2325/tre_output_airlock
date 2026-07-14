@@ -25,6 +25,7 @@ from sqlalchemy import and_, asc, desc, func, or_, select, text, update
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.api.common import _get_submission, _request_id
 from app.core.auth import Actor, get_actor, require_roles
 from app.core.config import settings
 from app.core.policy import API_VERSION, POLICY_VERSION, RULE_CATALOG
@@ -55,8 +56,6 @@ from app.services.audit import append_audit_event, verify_audit_chain
 from app.services.checker import ACTION_PRIORITY, OutputChecker, decision_from_findings
 from app.services.reports import build_report, verify_report
 from app.services.storage import FileTooLargeError, quarantined_path, store_quarantined_file
-
-from app.api.common import _get_submission, _request_id
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
