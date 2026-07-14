@@ -68,6 +68,20 @@ flowchart LR
 
 The GitHub Pages build runs entirely in the browser with synthetic in-memory records. It supports role switching, review claims, policy simulation, report verification and synthetic uploads without sending files to a server. The Docker deployment uses the real FastAPI and PostgreSQL services.
 
+## Product screenshots
+
+### Researcher operations dashboard
+
+![TRE Output Airlock operations dashboard](docs/screenshots/01-operations-dashboard.png)
+
+### Risk-prioritised reviewer queue
+
+![TRE Output Airlock reviewer queue](docs/screenshots/02-review-queue.png)
+
+### Claimed review with evidence and decision controls
+
+![TRE Output Airlock submission review detail](docs/screenshots/03-review-detail.png)
+
 ## Main capabilities
 
 ### Backend
