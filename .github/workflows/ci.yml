@@ -62,7 +62,23 @@ jobs:
           --output "$RUNNER_TEMP/benchmark-results.json"
           --require-all-expected
       - name: Audit Python dependencies
-        run: uv run pip-audit
+        id: python_audit
+        shell: bash
+        run: |
+          set +e
+          uv run pip-audit --format=json > "$RUNNER_TEMP/pip-audit.json" 2> "$RUNNER_TEMP/pip-audit.stderr"
+          status=$?
+          cat "$RUNNER_TEMP/pip-audit.stderr"
+          cat "$RUNNER_TEMP/pip-audit.json"
+          exit "$status"
+      - name: Upload Python audit diagnostics
+        if: failure() && steps.python_audit.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-audit-diagnostics
+          path: |
+            ${{ runner.temp }}/pip-audit.json
+            ${{ runner.temp }}/pip-audit.stderr
 
   frontend:
     runs-on: ubuntu-latest
