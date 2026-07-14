@@ -1,0 +1,61 @@
+name: Collect Pages screenshot files
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/collect-pages-files.yml"
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  collect:
+    if: github.repository == 'xm2325/tre_output_airlock'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/collect-pages-screenshots
+      - name: Download screenshot artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p docs/screenshots
+          gh run download 29367166199 \
+            --repo xm2325/tre_output_airlock \
+            --name pages-screenshots \
+            --dir docs/screenshots
+      - name: Update README
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('README.md')
+          text = path.read_text(encoding='utf-8')
+          if '## Product screenshots' not in text:
+              block = '''## Product screenshots
+
+### Researcher operations dashboard
+
+![TRE Output Airlock operations dashboard](docs/screenshots/01-operations-dashboard.png)
+
+### Risk-prioritised reviewer queue
+
+![TRE Output Airlock reviewer queue](docs/screenshots/02-review-queue.png)
+
+### Claimed review with evidence and decision controls
+
+![TRE Output Airlock submission review detail](docs/screenshots/03-review-detail.png)
+
+'''
+              text = text.replace('## Main capabilities', block + '## Main capabilities', 1)
+              path.write_text(text, encoding='utf-8')
+          PY
+      - name: Commit documentation
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add README.md docs/screenshots/*.png
+          git commit -m "Add live GitHub Pages screenshots"
+          git push origin HEAD:agent/collect-pages-screenshots
