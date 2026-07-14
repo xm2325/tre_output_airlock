@@ -9,8 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  issues: write
+  contents: read
   pages: write
   id-token: write
 
@@ -21,20 +20,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    outputs:
-      status_comment_id: ${{ steps.status_comment.outputs.comment_id }}
     steps:
-      - name: Create deployment status comment
-        id: status_comment
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          comment_id=$(gh api --method POST \
-            "repos/${GITHUB_REPOSITORY}/issues/12/comments" \
-            -f body="<!-- pages-deployment-status --> Pages deployment run [${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) started for commit ${GITHUB_SHA:0:7}." \
-            --jq '.id')
-          echo "comment_id=$comment_id" >> "$GITHUB_OUTPUT"
-
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -71,31 +57,27 @@ jobs:
     name: Capture live screenshots
     runs-on: ubuntu-latest
     needs: deploy
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-
       - name: Install Playwright Chromium
         run: |
-          mkdir -p "$RUNNER_TEMP/airlock-capture"
-          cd "$RUNNER_TEMP/airlock-capture"
+          mkdir -p "$RUNNER_TEMP/pages-capture"
+          cd "$RUNNER_TEMP/pages-capture"
           npm init -y
           npm install playwright@1.55.0
           npx playwright install --with-deps chromium
-
       - name: Capture deployed workflow
         env:
           SITE_URL: ${{ needs.deploy.outputs.page_url }}
-          NODE_PATH: ${{ runner.temp }}/airlock-capture/node_modules
+          NODE_PATH: ${{ runner.temp }}/pages-capture/node_modules
         run: |
-          mkdir -p docs/screenshots
+          mkdir -p pages-screenshots
           node <<'NODE'
           const { chromium } = require('playwright')
-          const fs = require('fs')
-
           const siteUrl = process.env.SITE_URL || 'https://xm2325.github.io/tre_output_airlock/'
 
           async function openWithRetry(page) {
@@ -131,7 +113,7 @@ jobs:
               content: '* { animation: none !important; transition: none !important; }',
             })
             await page.screenshot({
-              path: 'docs/screenshots/01-operations-dashboard.png',
+              path: 'pages-screenshots/01-operations-dashboard.png',
               fullPage: false,
             })
 
@@ -140,7 +122,7 @@ jobs:
             const reviewGrid = page.locator('.dashboard-grid--secondary').first()
             await reviewGrid.scrollIntoViewIfNeeded()
             await reviewGrid.screenshot({
-              path: 'docs/screenshots/02-review-queue.png',
+              path: 'pages-screenshots/02-review-queue.png',
             })
 
             await page.locator('.queue-row').first().click()
@@ -155,91 +137,17 @@ jobs:
             if (await templateButton.isEnabled()) await templateButton.click()
             await drawer.evaluate((element) => { element.scrollTop = 0 })
             await page.screenshot({
-              path: 'docs/screenshots/03-review-detail.png',
+              path: 'pages-screenshots/03-review-detail.png',
               fullPage: false,
             })
-
             await browser.close()
-            for (const name of fs.readdirSync('docs/screenshots')) {
-              console.log(`captured docs/screenshots/${name}`)
-            }
           })().catch((error) => {
             console.error(error)
             process.exit(1)
           })
           NODE
-
-      - name: Add screenshots to README
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("README.md")
-          text = path.read_text(encoding="utf-8")
-          heading = "## Product screenshots"
-          if heading not in text:
-              block = """## Product screenshots
-
-### Researcher operations dashboard
-
-![TRE Output Airlock operations dashboard](docs/screenshots/01-operations-dashboard.png)
-
-### Risk-prioritised reviewer queue
-
-![TRE Output Airlock reviewer queue](docs/screenshots/02-review-queue.png)
-
-### Claimed review with evidence and decision controls
-
-![TRE Output Airlock submission review detail](docs/screenshots/03-review-detail.png)
-
-"""
-              anchor = "## Main capabilities"
-              if anchor not in text:
-                  raise SystemExit(f"README anchor not found: {anchor}")
-              path.write_text(text.replace(anchor, block + anchor, 1), encoding="utf-8")
-          PY
-
-      - name: Upload screenshot artifact
+      - name: Upload live screenshots
         uses: actions/upload-artifact@v4
         with:
           name: pages-screenshots
-          path: docs/screenshots/*.png
-
-      - name: Commit screenshots
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md docs/screenshots/*.png
-          if git diff --cached --quiet; then
-            echo "Screenshots are unchanged."
-            exit 0
-          fi
-          git commit -m "Add live GitHub Pages screenshots"
-          git push
-
-  report:
-    name: Report deployment status
-    runs-on: ubuntu-latest
-    needs: [build, deploy, screenshots]
-    if: always()
-    steps:
-      - name: Update PR deployment comment
-        env:
-          GH_TOKEN: ${{ github.token }}
-          COMMENT_ID: ${{ needs.build.outputs.status_comment_id }}
-          BUILD_RESULT: ${{ needs.build.result }}
-          DEPLOY_RESULT: ${{ needs.deploy.result }}
-          SCREENSHOT_RESULT: ${{ needs.screenshots.result }}
-          PAGE_URL: ${{ needs.deploy.outputs.page_url }}
-        run: |
-          if [ -z "$COMMENT_ID" ]; then
-            echo "No status comment was created."
-            exit 0
-          fi
-          body="<!-- pages-deployment-status --> Pages deployment run [${GITHUB_RUN_ID}](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}) completed: build=${BUILD_RESULT}, deploy=${DEPLOY_RESULT}, screenshots=${SCREENSHOT_RESULT}."
-          if [ -n "$PAGE_URL" ]; then
-            body="${body} Site: ${PAGE_URL}"
-          fi
-          gh api --method PATCH \
-            "repos/${GITHUB_REPOSITORY}/issues/comments/${COMMENT_ID}" \
-            -f body="$body"
+          path: pages-screenshots/*.png
