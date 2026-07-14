@@ -1,19 +1,34 @@
 # Python
 __pycache__/
 *.py[cod]
-.venv/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.coverage
-htmlcov/
+.venv/
 
-# Node
-node_modules/
-dist/
-*.tsbuildinfo
-
-# Local runtime
-.env
+# Runtime data
+backend/data/
 backend/quarantine/
-backend/*.db
+*.db
+*.sqlite3
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+*.tsbuildinfo
+# Editors / OS
+.DS_Store
+.idea/
+.vscode/
+# Secrets
+.env
+.env.*
+!.env.example
+# Generated Python package metadata
+backend/*.egg-info/
+# Local benchmark scratch outputs
+benchmark/*.tmp.json
+backend/tests/.runtime/
+
+# Locally generated API schema
+docs/openapi.generated.json

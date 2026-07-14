@@ -55,7 +55,7 @@ flowchart LR
 
 ### Backend
 
-- FastAPI REST API and committed OpenAPI snapshot;
+- FastAPI REST API and generated OpenAPI schema;
 - streamed quarantine upload with a size limit and SHA-256 fingerprint;
 - file-signature, direct-identifier, quasi-identifier, small-cell, uniqueness, free-text, formula and metadata checks;
 - explicit, versioned rule-to-action policy;
@@ -88,7 +88,7 @@ flowchart LR
 - frontend production build;
 - npm and Python dependency-audit gates in CI;
 - migration smoke test;
-- OpenAPI snapshot check;
+- OpenAPI schema generation check;
 - synthetic benchmark check;
 - Docker Compose validation and image build.
 
@@ -100,7 +100,7 @@ frontend/                        React + TypeScript dashboard and tests
 benchmark/                       Synthetic benchmark manifest and results
 samples/                         Synthetic ALLOW, REVIEW and BLOCK files
 infra/aws/                       Encrypted S3/SQS quarantine baseline
-scripts/export_openapi.py        OpenAPI snapshot generator and check
+scripts/export_openapi.py        OpenAPI schema generator
 docs/architecture.md             Runtime and production architecture
 docs/decision-policy.md          Rule, action and policy-change model
 docs/threat-model.md             Assets, abuse cases and controls
@@ -142,7 +142,7 @@ Frontend in another terminal:
 
 ```bash
 cd frontend
-npm ci
+npm install
 npm run dev
 ```
 
