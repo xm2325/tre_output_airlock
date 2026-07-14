@@ -1,50 +1,29 @@
-name: Apply v0.4 delivery patch
+name: Export branch git metadata
 
 on:
-  push:
-    branches: [agent/v040-synthetic-evaluation]
+  pull_request:
     paths:
-      - ".delivery/v040/**"
       - ".github/workflows/export-source.yml"
-  workflow_dispatch:
 
 permissions:
-  contents: write
-
-concurrency:
-  group: v040-delivery
-  cancel-in-progress: false
+  contents: read
 
 jobs:
-  apply:
+  export:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Read branch commit and tree
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p git-metadata
+          ref_json=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/agent/v040-synthetic-evaluation")
+          commit_sha=$(printf '%s' "$ref_json" | jq -r '.object.sha')
+          gh api "repos/${GITHUB_REPOSITORY}/git/commits/${commit_sha}" > git-metadata/commit.json
+          printf '%s\n' "$commit_sha" > git-metadata/commit-sha.txt
+          jq -r '.tree.sha' git-metadata/commit.json > git-metadata/tree-sha.txt
+      - uses: actions/upload-artifact@v4
         with:
-          ref: agent/v040-synthetic-evaluation
-          fetch-depth: 0
-      - name: Verify and apply patch
-        run: |
-          set -euo pipefail
-          if [ ! -d .delivery/v040 ]; then
-            echo "No delivery payload remains."
-            exit 0
-          fi
-          cat .delivery/v040/patch-* > "$RUNNER_TEMP/v040.patch.gz.b64"
-          base64 --decode "$RUNNER_TEMP/v040.patch.gz.b64" > "$RUNNER_TEMP/v040.patch.gz"
-          echo "61e8408d68e723a8eea64777e8a744312797516ca031ca03244253f69b10e135  $RUNNER_TEMP/v040.patch.gz" | sha256sum --check
-          gzip --decompress --stdout "$RUNNER_TEMP/v040.patch.gz" > "$RUNNER_TEMP/v040.patch"
-          git apply --binary -p4 "$RUNNER_TEMP/v040.patch"
-      - name: Commit v0.4
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          rm -rf .delivery/v040
-          git add -A
-          if git diff --cached --quiet; then
-            echo "No v0.4 changes to commit."
-            exit 0
-          fi
-          git commit -m "Implement v0.4 synthetic evaluation"
-          git push origin HEAD:agent/v040-synthetic-evaluation
+          name: branch-git-metadata
+          path: git-metadata
