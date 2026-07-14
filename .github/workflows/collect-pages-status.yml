@@ -1,4 +1,4 @@
-name: Collect Pages screenshots
+name: Query screenshot publisher
 
 on:
   pull_request:
@@ -7,61 +7,20 @@ on:
 
 permissions:
   actions: read
-  contents: write
+  contents: read
 
 jobs:
-  collect:
+  query:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: agent/collect-pages-screenshots
-      - name: Download live Pages screenshots
+      - name: Query publisher runs
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p docs/screenshots
-          gh run download 29367166199 \
-            --repo "$GITHUB_REPOSITORY" \
-            --name pages-screenshots \
-            --dir docs/screenshots
-      - name: Add screenshot section to README
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          path = Path("README.md")
-          text = path.read_text(encoding="utf-8")
-          heading = "## Product screenshots"
-          if heading not in text:
-              block = """## Product screenshots
-
-### Researcher operations dashboard
-
-![TRE Output Airlock operations dashboard](docs/screenshots/01-operations-dashboard.png)
-
-### Risk-prioritised reviewer queue
-
-![TRE Output Airlock reviewer queue](docs/screenshots/02-review-queue.png)
-
-### Claimed review with evidence and decision controls
-
-![TRE Output Airlock submission review detail](docs/screenshots/03-review-detail.png)
-
-"""
-              anchor = "## Main capabilities"
-              if anchor not in text:
-                  raise SystemExit(f"README anchor not found: {anchor}")
-              path.write_text(text.replace(anchor, block + anchor, 1), encoding="utf-8")
-          PY
-      - name: Commit screenshots and README
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md docs/screenshots/*.png
-          if git diff --cached --quiet; then
-            echo "Screenshot documentation is unchanged."
-            exit 0
-          fi
-          git commit -m "Add live GitHub Pages screenshots"
-          git push origin HEAD:agent/collect-pages-screenshots
+          mkdir -p publisher-status
+          gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/publish-pages-screenshots.yml/runs?per_page=10" \
+            > publisher-status/runs.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshot-publisher-status
+          path: publisher-status/runs.json
