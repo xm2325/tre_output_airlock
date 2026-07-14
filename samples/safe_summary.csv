@@ -1,0 +1,5 @@
+age_band,sex,mean_measurement,standard_error
+40-49,Female,1.42,0.08
+40-49,Male,1.37,0.07
+50-59,Female,1.51,0.06
+50-59,Male,1.46,0.09

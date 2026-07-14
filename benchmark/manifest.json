@@ -1,0 +1,14 @@
+{
+  "benchmark_version": "synthetic-benchmark-2026.1",
+  "cases": [
+    {"file": "safe_summary.csv", "expected_decision": "ALLOW", "unsafe": false},
+    {"file": "small_cell_table.csv", "expected_decision": "REVIEW", "unsafe": true},
+    {"file": "high_uniqueness.csv", "expected_decision": "REVIEW", "unsafe": true},
+    {"file": "spreadsheet_formula.csv", "expected_decision": "REVIEW", "unsafe": true},
+    {"file": "participant_level_export.csv", "expected_decision": "BLOCK", "unsafe": true},
+    {"file": "contact_in_notes.txt", "expected_decision": "BLOCK", "unsafe": true},
+    {"file": "postcode_in_notes.txt", "expected_decision": "BLOCK", "unsafe": true},
+    {"file": "date_of_birth.txt", "expected_decision": "BLOCK", "unsafe": true},
+    {"file": "fake_report.pdf", "expected_decision": "BLOCK", "unsafe": true}
+  ]
+}

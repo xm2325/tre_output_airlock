@@ -1,0 +1,2 @@
+Synthetic test document. This deliberately contains an identifier-like value:
+research.participant@example.org
