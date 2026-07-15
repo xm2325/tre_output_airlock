@@ -1,5 +1,5 @@
 import { buildSubmissionQuery } from './query'
-import { createMockApi } from './mockApi'
+import { createMockApi, DEMO_SEED_COUNT } from './mockApi'
 import type {
   Actor,
   AuditVerification,
@@ -17,7 +17,12 @@ import type {
 } from '../types/api'
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8000'
-let currentActor: Actor = { name: 'xiaomei-researcher', role: 'researcher' }
+export const isStaticDemo = import.meta.env.VITE_DEMO_MODE === 'true'
+export { DEMO_SEED_COUNT }
+
+let currentActor: Actor = isStaticDemo
+  ? { name: 'xiaomei-reviewer', role: 'reviewer' }
+  : { name: 'xiaomei-researcher', role: 'researcher' }
 
 export function setApiActor(actor: Actor) {
   currentActor = actor
@@ -89,5 +94,4 @@ const liveApi = {
     }),
 }
 
-export const isStaticDemo = import.meta.env.VITE_DEMO_MODE === 'true'
 export const api = isStaticDemo ? createMockApi(() => currentActor) : liveApi

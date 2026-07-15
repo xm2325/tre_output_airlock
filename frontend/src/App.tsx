@@ -10,7 +10,7 @@ import { PolicyLab } from './components/PolicyLab'
 import { ReviewQueue } from './components/ReviewQueue'
 import { SubmissionTable } from './components/SubmissionTable'
 import { UploadPanel } from './components/UploadPanel'
-import { api, isStaticDemo, setApiActor } from './lib/api'
+import { api, DEMO_SEED_COUNT, isStaticDemo, setApiActor } from './lib/api'
 import type {
   Actor, DecisionReport, Metrics, Policy, PolicySimulationInput, SubmissionDetail,
   SubmissionFilters, SubmissionPage, SubmissionSummary, UploadMetadata,
@@ -25,6 +25,9 @@ const emptyMetrics: Metrics = {
 }
 const emptyPage: SubmissionPage = { items: [], page: 1, page_size: 25, total: 0, pages: 1 }
 const initialFilters: SubmissionFilters = { page: 1, pageSize: 25, sort: 'newest' }
+const initialActor: Actor = isStaticDemo
+  ? { name: 'xiaomei-reviewer', role: 'reviewer' }
+  : { name: 'xiaomei-researcher', role: 'researcher' }
 
 function downloadJson(report: DecisionReport, filename: string) {
   const safeBase = filename.replace(/\.[^.]+$/, '').replace(/[^a-zA-Z0-9-_]+/g, '-')
@@ -37,7 +40,7 @@ function downloadJson(report: DecisionReport, filename: string) {
 }
 
 function App() {
-  const [actor, setActor] = useState<Actor>({ name: 'xiaomei-researcher', role: 'researcher' })
+  const [actor, setActor] = useState<Actor>(initialActor)
   const [metrics, setMetrics] = useState<Metrics>(emptyMetrics)
   const [policy, setPolicy] = useState<Policy | null>(null)
   const [submissions, setSubmissions] = useState<SubmissionPage>(emptyPage)
@@ -108,7 +111,7 @@ function App() {
           <i /> {error ? 'Service attention required' : isStaticDemo ? 'Static demo operational' : 'Service operational'}</span>
           <span>{policy?.policy_version ?? metrics.policy_version}</span></div></header>
       <main>
-        {isStaticDemo && <section className="demo-mode-banner" role="status"><strong>Static portfolio demo</strong><span>All records are synthetic and stored only in this browser session. No backend or real data is connected.</span></section>}
+        {isStaticDemo && <section className="demo-mode-banner" role="status"><strong>Static portfolio demo</strong><span>{DEMO_SEED_COUNT} synthetic outputs are preloaded in reviewer view. Switch roles to demonstrate researcher ownership filtering and administrator controls. No backend or real data is connected.</span></section>}
         <section className="hero"><div><p className="eyebrow">Release assurance workflow</p>
           <h2>Transparent checks, controlled review, verifiable decisions.</h2>
           <p>A production-minded demonstration of output checking before research files leave a controlled environment.</p></div>
