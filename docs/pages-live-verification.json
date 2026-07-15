@@ -1,0 +1,9 @@
+{
+  "verified_at": "2026-07-15T00:55:56.146Z",
+  "deployed_sha": "55612adc402ae389a8804ac5a132de2b257e79c5",
+  "site_url": "https://xm2325.github.io/tre_output_airlock/",
+  "observed_total_outputs": 18,
+  "observed_review_queue": 6,
+  "default_role": "reviewer",
+  "result": "PASS"
+}
