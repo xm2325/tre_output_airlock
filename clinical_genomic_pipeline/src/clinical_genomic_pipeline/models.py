@@ -43,3 +43,4 @@ class PipelineResult:
     people_count: int
     sample_count: int
     issue_count: int
+    warning_count: int = 0
