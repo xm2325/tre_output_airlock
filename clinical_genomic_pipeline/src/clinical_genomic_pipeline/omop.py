@@ -12,7 +12,7 @@ _GENDER_CONCEPTS = {"female": 8532, "male": 8507}
 
 
 def _numeric_id(value: str) -> int:
-    """Create a stable positive 63-bit identifier for the synthetic OMOP-shaped tables."""
+    """Create a stable positive 63-bit identifier for synthetic OMOP-shaped tables."""
     digest = hashlib.sha256(value.encode("utf-8")).digest()
     return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
 
@@ -21,9 +21,10 @@ def build_omop_tables(
     clinical: NormalisedClinicalData,
     terminology_map: dict[tuple[str, str], dict[str, Any]],
 ) -> dict[str, list[dict[str, Any]]]:
-    """Create person, condition, measurement and specimen tables with explicit source fields."""
+    """Create person, condition, measurement and specimen tables."""
     person_ids = {
-        str(record["person_id"]): _numeric_id(str(record["person_id"])) for record in clinical.people
+        str(record["person_id"]): _numeric_id(str(record["person_id"]))
+        for record in clinical.people
     }
 
     people = [
@@ -93,8 +94,10 @@ def build_omop_tables(
     }
 
 
-def build_omop_quality_report(tables: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
-    """Check primary keys, foreign keys and required fields in the OMOP-aligned output."""
+def build_omop_quality_report(
+    tables: dict[str, list[dict[str, Any]]],
+) -> dict[str, Any]:
+    """Check primary keys, foreign keys and required fields."""
     people = tables["person"]
     person_ids = {int(record["person_id"]) for record in people}
     duplicate_person_ids = len(people) - len(person_ids)
@@ -114,14 +117,18 @@ def build_omop_quality_report(tables: dict[str, list[dict[str, Any]]]) -> dict[s
     for table_name, rows in tables.items():
         required = required_by_table[table_name]
         required_null_count += sum(
-            value is None or value == "" for row in rows for value in (row.get(field) for field in required)
+            value is None or value == ""
+            for row in rows
+            for value in (row.get(field) for field in required)
         )
         if table_name != "person":
-            orphan_count += sum(int(row["person_id"]) not in person_ids for row in rows)
+            orphan_count += sum(
+                int(row["person_id"]) not in person_ids for row in rows
+            )
 
-    status = "PASS" if duplicate_person_ids == 0 and orphan_count == 0 and required_null_count == 0 else "FAIL"
+    failures = duplicate_person_ids + orphan_count + required_null_count
     return {
-        "status": status,
+        "status": "PASS" if failures == 0 else "FAIL",
         "row_counts": {name: len(rows) for name, rows in tables.items()},
         "duplicate_person_id_count": duplicate_person_ids,
         "orphan_person_reference_count": orphan_count,
