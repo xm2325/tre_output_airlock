@@ -1,4 +1,4 @@
-"""AWS curated-publication planning with an explicit restricted-data deny boundary."""
+"""AWS curated-publication planning with a restricted-data deny boundary."""
 
 from __future__ import annotations
 
@@ -39,7 +39,12 @@ def build_curated_publish_plan(
             classification = "OPERATIONAL_EVIDENCE"
         else:
             continue
-        key = "/".join(part for part in (prefix.strip("/"), run_directory.name, relative.as_posix()) if part)
+        key_parts = (
+            prefix.strip("/"),
+            run_directory.name,
+            relative.as_posix(),
+        )
+        key = "/".join(part for part in key_parts if part)
         plan.append(
             {
                 "source_path": str(path),
@@ -51,8 +56,12 @@ def build_curated_publish_plan(
             }
         )
 
-    if any("restricted" in Path(item["source_path"]).parts for item in plan):
-        raise AssertionError("Restricted linkage material must never enter the curated publish plan")
+    restricted_found = any(
+        "restricted" in Path(item["source_path"]).parts for item in plan
+    )
+    if restricted_found:
+        message = "Restricted linkage material must not enter the curated plan"
+        raise AssertionError(message)
     return plan
 
 
@@ -62,7 +71,7 @@ def upload_curated_publish_plan(
     client: Any,
     kms_key_id: str,
 ) -> dict[str, Any]:
-    """Upload a pre-validated plan through a boto3-compatible client using SSE-KMS."""
+    """Upload a validated plan through a boto3-compatible client using SSE-KMS."""
     if not kms_key_id.strip():
         raise ValueError("kms_key_id must not be empty")
     uploaded_bytes = 0
