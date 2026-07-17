@@ -1,35 +1,70 @@
 # TRE Output Airlock
 
 [![CI](https://github.com/xm2325/tre_output_airlock/actions/workflows/ci.yml/badge.svg)](https://github.com/xm2325/tre_output_airlock/actions/workflows/ci.yml)
+[![Clinical genomic pipeline](https://github.com/xm2325/tre_output_airlock/actions/workflows/clinical-genomic-pipeline.yml/badge.svg)](https://github.com/xm2325/tre_output_airlock/actions/workflows/clinical-genomic-pipeline.yml)
 [![Pages demo](https://github.com/xm2325/tre_output_airlock/actions/workflows/pages.yml/badge.svg)](https://github.com/xm2325/tre_output_airlock/actions/workflows/pages.yml)
 
-[Open the browser-only synthetic demo](https://xm2325.github.io/tre_output_airlock/) · [Read the production-readiness gap analysis](docs/production-readiness.md)
+[Open the browser-only synthetic Airlock demo](https://xm2325.github.io/tre_output_airlock/) · [Review the clinical–genomic pipeline](clinical_genomic_pipeline/README.md) · [Read the production-readiness gap analysis](docs/production-readiness.md)
 
-A production-minded full-stack portfolio demonstration of research-output checking before files leave a trusted research environment (TRE).
+A production-minded portfolio demonstration of the controlled data path around a trusted research environment (TRE): synthetic clinical and genomic ingestion, research-ready data publication, and disclosure review before outputs leave the TRE.
 
-> **Safety boundary:** this repository uses synthetic files and a demonstration policy. It is not affiliated with UK Biobank, does not implement UK Biobank policy, and must not be used with real participant data.
+> **Safety boundary:** this repository uses synthetic files and demonstration policies. It is not affiliated with UK Biobank or Genomics England, does not implement either organisation's policy, and must not be used with real participant data.
 
-## Problem addressed
+## Problems addressed
 
-A TRE release service must do more than identify risky text. It must store an output safely, explain the evidence, route uncertain cases to people, prevent conflicting reviewer actions, preserve the history, and support later verification.
+A health-data platform must control both sides of research use.
 
-This project demonstrates that workflow through three outcomes:
+Before analysis, it must verify clinical and genomic deliveries, detect contract changes, remove direct identifiers, separate restricted linkage material, record lineage and prevent partial publication.
+
+After analysis, a release service must store outputs safely, explain risk evidence, route uncertain cases to reviewers, prevent conflicting actions, preserve history and support later verification.
+
+## End-to-end control path
+
+```mermaid
+flowchart LR
+  A[Synthetic FHIR and VCF delivery] --> B[Contract, reference and checksum checks]
+  B -->|invalid or breaking drift| Q[Ingestion quarantine]
+  B -->|valid| C[De-identification and clinical-genomic linkage]
+  C --> D[Bronze, silver, gold and restricted zones]
+  D --> E[Contract report, lineage and operations evidence]
+  E --> F[TRE research use]
+  F --> G[Researcher output submission]
+  G --> H[Airlock quarantine and disclosure checks]
+  H --> I{Versioned release policy}
+  I -->|ALLOW| J[Signed release decision]
+  I -->|REVIEW| K[Claimed human review]
+  I -->|BLOCK| L[Automated block]
+  K --> J
+  J --> M[Hash-linked audit verification]
+  L --> M
+```
+
+## Current portfolio scope
+
+### Clinical–genomic ingestion
+
+- a supported FHIR R4 subset for `Patient`, `Condition`, `Observation` and `Specimen`;
+- VCF manifest checks for foreign keys, genome assembly, path safety and SHA-256;
+- a versioned schema contract with `PASS`, `WARN` and `FAIL` results;
+- a value-free schema fingerprint recorded in lineage;
+- breaking schema drift quarantined before transformation;
+- additive schema drift published with warning evidence;
+- HMAC pseudonyms and deterministic patient-level date shifts;
+- separate bronze, silver, gold and restricted zones;
+- atomic publication, `_SUCCESS`, safe replay and structured quarantine evidence;
+- Prefect task boundaries and retry policy;
+- operations JSON and portable HTML for run, warning and quarantine state;
+- an encrypted AWS S3, KMS, SQS and dead-letter Terraform baseline.
+
+### TRE Output Airlock
+
+The release workflow has three outcomes:
 
 - `ALLOW`: no configured release concern was detected;
 - `REVIEW`: a reviewer must claim the item and record a rationale;
 - `BLOCK`: a critical condition prevents release.
 
-## Version 0.3.1
-
-This delivery release adds:
-
-- reproducible Python environments through `uv.lock`;
-- a Docker Compose integration test across PostgreSQL, migrations, API and frontend;
-- a GitHub Pages browser-only synthetic demo;
-- frontend API contract tests;
-- quieter handling of invalid PDF and image signatures.
-
-The underlying v0.3 workflow includes:
+The Airlock includes:
 
 - researcher, reviewer and admin scopes;
 - researcher ownership filtering;
@@ -47,7 +82,7 @@ The underlying v0.3 workflow includes:
 - an encrypted AWS quarantine and queue baseline;
 - frontend unit tests and expanded CI gates.
 
-## System workflow
+## Airlock workflow
 
 ```mermaid
 flowchart LR
@@ -113,37 +148,44 @@ The GitHub Pages build runs entirely in the browser with synthetic in-memory rec
 
 ### Delivery evidence
 
-- 31 backend tests and a 90% coverage gate;
+- 31 Airlock backend tests and a 90% coverage gate;
 - 8 frontend unit and API contract tests;
+- 8 clinical–genomic pipeline tests, including schema drift and operations state;
 - Ruff, MyPy and TypeScript checks;
 - frontend production build;
 - npm and Python dependency-audit gates in CI;
 - migration smoke test;
 - OpenAPI snapshot check;
-- synthetic benchmark check;
+- synthetic policy benchmark check;
+- direct-identifier scans across research-ready clinical data;
+- data-contract fingerprint and operations evidence artifacts;
+- Terraform format and validation checks;
 - Docker Compose validation, full-stack startup smoke test and image build.
 
 ## Repository structure
 
 ```text
-backend/                         FastAPI service, Alembic migration and tests
-frontend/                        React + TypeScript dashboard and tests
-benchmark/                       Synthetic benchmark manifest and results
-samples/                         Synthetic ALLOW, REVIEW and BLOCK files
-infra/aws/                       Encrypted S3/SQS quarantine baseline
-scripts/export_openapi.py        OpenAPI snapshot generator and check
-docs/architecture.md             Runtime and production architecture
-docs/decision-policy.md          Rule, action and policy-change model
-docs/threat-model.md             Assets, abuse cases and controls
-docs/production-readiness.md     Demonstrated controls versus remaining work
-docs/runbook.md                  Local operating and failure procedures
-docs/adr/                        Recorded design decisions
-VALIDATION.md                    Reproducible local validation record
+backend/                                FastAPI Airlock service, migration and tests
+frontend/                               React + TypeScript Airlock dashboard and tests
+clinical_genomic_pipeline/              FHIR/VCF ingestion, contracts, lineage and operations
+benchmark/                              Synthetic Airlock benchmark manifest and results
+samples/                                Synthetic ALLOW, REVIEW and BLOCK files
+infra/aws/                              Airlock AWS quarantine baseline
+infra/aws/clinical_genomic/             Clinical-genomic S3, KMS, SQS and IAM baseline
+scripts/export_openapi.py               OpenAPI snapshot generator and check
+docs/architecture.md                    Airlock runtime and production architecture
+docs/clinical-genomic-platform.md       Upstream data-platform design and controls
+docs/decision-policy.md                 Rule, action and policy-change model
+docs/threat-model.md                    Assets, abuse cases and controls
+docs/production-readiness.md            Demonstrated controls versus remaining work
+docs/runbook.md                         Local operating and failure procedures
+docs/adr/                               Recorded design decisions
+VALIDATION.md                           Reproducible local validation record
 ```
 
 Interview-specific notes are intentionally not included in this repository.
 
-## Run with Docker
+## Run the Airlock with Docker
 
 ```bash
 cp .env.example .env
@@ -159,7 +201,7 @@ Open:
 
 Docker Compose uses PostgreSQL. The API container runs `alembic upgrade head` before startup.
 
-## Run without Docker
+## Run the Airlock without Docker
 
 Backend with SQLite:
 
@@ -177,6 +219,24 @@ npm ci
 npm run dev
 ```
 
+## Run the clinical–genomic path
+
+```bash
+cd clinical_genomic_pipeline
+python -m pip install -e .
+clinical-genomic-pipeline \
+  --fhir samples/fhir_bundle.json \
+  --manifest samples/genomic_manifest.csv \
+  --output build/demo \
+  --secret 'replace-with-a-long-demo-secret'
+clinical-genomic-operations \
+  --output build/demo \
+  --json build/demo/operations-summary.json \
+  --html build/demo/operations-dashboard.html
+```
+
+See [`clinical_genomic_pipeline/README.md`](clinical_genomic_pipeline/README.md) for the contract, outputs, test cases and production limits.
+
 ## Demo identity
 
 The Docker-backed browser lets the user switch between `researcher`, `reviewer` and `admin`. It sends `X-Demo-User` and `X-Demo-Role` headers. This is only a local demonstration of authorisation logic, not authentication.
@@ -189,7 +249,7 @@ curl http://localhost:8000/api/v1/me \
   -H 'X-Demo-Role: reviewer'
 ```
 
-## Upload example
+## Airlock upload example
 
 ```bash
 curl -X POST http://localhost:8000/api/v1/submissions \
@@ -202,7 +262,7 @@ curl -X POST http://localhost:8000/api/v1/submissions \
   -F 'file=@samples/small_cell_table.csv'
 ```
 
-## Review example
+## Airlock review example
 
 Claim the item first:
 
@@ -226,7 +286,7 @@ curl -X POST http://localhost:8000/api/v1/submissions/<id>/review \
   }'
 ```
 
-## Synthetic benchmark
+## Synthetic Airlock benchmark
 
 ```bash
 make benchmark
@@ -240,11 +300,13 @@ The committed benchmark contains nine synthetic cases. The current result is 9/9
 make validate
 ```
 
+The clinical–genomic package has a separate GitHub Actions workflow that runs strict MyPy, Ruff, eight unit tests, repeatable sample execution, direct-identifier scans, contract and operations assertions, Terraform validation and evidence upload.
+
 `pip-audit` requires network access to its vulnerability service. The same audit runs in GitHub Actions.
 
 ## Production boundary
 
-Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing this project as production-ready. Key remaining work includes managed identity, object-store quarantine, isolated asynchronous scanning, malware detection, managed signing keys, an approved real-world test corpus, central monitoring and independent disclosure-control review.
+Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing this project as production-ready. Key remaining work includes managed identity, object-store quarantine, isolated asynchronous scanning, malware detection, managed signing keys, approved source-system profiles, central monitoring and paging, data-retention enforcement, a representative test corpus and independent privacy and disclosure-control review.
 
 ## Author
 
