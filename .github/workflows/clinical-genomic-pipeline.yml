@@ -1,0 +1,101 @@
+name: Clinical genomic pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "clinical_genomic_pipeline/**"
+      - "infra/aws/clinical_genomic/**"
+      - "docs/clinical-genomic-platform.md"
+      - "docs/adr/0005-clinical-genomic-data-contract.md"
+      - ".github/workflows/clinical-genomic-pipeline.yml"
+  pull_request:
+    paths:
+      - "clinical_genomic_pipeline/**"
+      - "infra/aws/clinical_genomic/**"
+      - "docs/clinical-genomic-platform.md"
+      - "docs/adr/0005-clinical-genomic-data-contract.md"
+      - ".github/workflows/clinical-genomic-pipeline.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: clinical-genomic-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: clinical_genomic_pipeline
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: clinical_genomic_pipeline/pyproject.toml
+      - name: Install package and checks
+        run: python -m pip install -e '.[dev,orchestration]'
+      - name: Ruff
+        run: ruff check src tests
+      - name: MyPy
+        run: mypy src
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Run valid synthetic delivery twice
+        env:
+          PIPELINE_PSEUDONYMISATION_SECRET: ci-only-secret-at-least-16-characters
+        run: |
+          clinical-genomic-pipeline \
+            --fhir samples/fhir_bundle.json \
+            --manifest samples/genomic_manifest.csv \
+            --output build/ci > build-first.json
+          clinical-genomic-pipeline \
+            --fhir samples/fhir_bundle.json \
+            --manifest samples/genomic_manifest.csv \
+            --output build/ci > build-second.json
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          first = json.loads(Path("build-first.json").read_text())
+          second = json.loads(Path("build-second.json").read_text())
+          assert first["reused_existing_run"] is False
+          assert second["reused_existing_run"] is True
+          assert first["run_id"] == second["run_id"]
+          PY
+      - name: Assert direct identifiers are absent from research zone
+        run: |
+          if grep -R -E 'patient-001|specimen-001|sample-001|Synthetic|Exampletown|ZZ1 1ZZ' \
+            build/ci/runs/*/gold build/ci/runs/*/silver; then
+            echo "Direct identifier found in a research-ready zone"
+            exit 1
+          fi
+      - name: Upload run evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: clinical-genomic-run-evidence
+          path: |
+            clinical_genomic_pipeline/build-first.json
+            clinical_genomic_pipeline/build-second.json
+            clinical_genomic_pipeline/build/ci/runs/*/lineage.json
+            clinical_genomic_pipeline/build/ci/runs/*/metrics.json
+            clinical_genomic_pipeline/build/ci/runs/*/gold/research_cohort.csv
+
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/aws/clinical_genomic
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
