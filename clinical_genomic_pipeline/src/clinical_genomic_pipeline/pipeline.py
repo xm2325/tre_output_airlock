@@ -98,7 +98,9 @@ def run_pipeline(
 ) -> PipelineResult:
     """Validate, de-identify, join and publish one synthetic delivery."""
     start = time.perf_counter()
-    secret_value = secret or os.getenv("PIPELINE_PSEUDONYMISATION_SECRET", "")
+    secret_value: str = secret if secret is not None else (
+        os.getenv("PIPELINE_PSEUDONYMISATION_SECRET") or ""
+    )
     if len(secret_value) < 16:
         raise ValueError("Provide a pseudonymisation secret with at least 16 characters")
 
@@ -111,14 +113,16 @@ def run_pipeline(
     final_directory = output_root / "runs" / run_id
     success_marker = final_directory / "_SUCCESS"
     if success_marker.is_file():
-        metrics = json.loads((final_directory / "metrics.json").read_text(encoding="utf-8"))
+        existing_metrics = json.loads(
+            (final_directory / "metrics.json").read_text(encoding="utf-8")
+        )
         return PipelineResult(
             run_id=run_id,
             run_directory=final_directory,
             reused_existing_run=True,
-            people_count=int(metrics["people_count"]),
-            sample_count=int(metrics["sample_count"]),
-            issue_count=int(metrics["issue_count"]),
+            people_count=int(existing_metrics["people_count"]),
+            sample_count=int(existing_metrics["sample_count"]),
+            issue_count=int(existing_metrics["issue_count"]),
         )
 
     bundle = json.loads(fhir_path.read_text(encoding="utf-8"))
