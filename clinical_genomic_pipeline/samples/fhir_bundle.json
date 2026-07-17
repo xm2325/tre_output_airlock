@@ -1,0 +1,59 @@
+{
+  "resourceType": "Bundle",
+  "type": "collection",
+  "entry": [
+    {
+      "resource": {
+        "resourceType": "Patient",
+        "id": "patient-001",
+        "name": [{"family": "Synthetic", "given": ["Alice"]}],
+        "gender": "female",
+        "birthDate": "1980-05-12",
+        "address": [{"city": "Exampletown", "postalCode": "ZZ1 1ZZ"}]
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Specimen",
+        "id": "specimen-001",
+        "subject": {"reference": "Patient/patient-001"},
+        "collection": {"collectedDateTime": "2026-01-10"}
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Condition",
+        "id": "condition-001",
+        "subject": {"reference": "Patient/patient-001"},
+        "code": {
+          "coding": [
+            {
+              "system": "http://snomed.info/sct",
+              "code": "44054006",
+              "display": "Diabetes mellitus type 2"
+            }
+          ]
+        },
+        "onsetDateTime": "2021-02-14"
+      }
+    },
+    {
+      "resource": {
+        "resourceType": "Observation",
+        "id": "observation-001",
+        "subject": {"reference": "Patient/patient-001"},
+        "code": {
+          "coding": [
+            {
+              "system": "http://loinc.org",
+              "code": "4548-4",
+              "display": "Haemoglobin A1c"
+            }
+          ]
+        },
+        "effectiveDateTime": "2026-01-12",
+        "valueQuantity": {"value": 48, "unit": "mmol/mol"}
+      }
+    }
+  ]
+}
