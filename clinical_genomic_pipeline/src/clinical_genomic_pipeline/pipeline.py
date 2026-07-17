@@ -11,11 +11,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .contracts import evaluate_contract
 from .fhir import transform_bundle, validate_bundle
 from .genomics import load_manifest, validate_manifest
 from .hashing import pseudonymise, sha256_file, sha256_text
 from .lineage import build_lineage_manifest
-from .models import NormalisedClinicalData, PipelineResult, ValidationIssue
+from .models import GenomicManifestRow, NormalisedClinicalData, PipelineResult, ValidationIssue
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -46,7 +47,7 @@ def _resource_ids(bundle: dict[str, Any], resource_type: str) -> set[str]:
 def _run_id(fhir_path: Path, manifest_path: Path) -> str:
     material = "|".join(
         [
-            "pipeline-version=0.1.0",
+            "pipeline-version=0.2.0",
             sha256_file(fhir_path),
             sha256_file(manifest_path),
         ]
@@ -66,9 +67,38 @@ def _issues_as_dicts(issues: list[ValidationIssue]) -> list[dict[str, str | None
     ]
 
 
+def _breaking_contract_issues(contract_report: dict[str, Any]) -> list[ValidationIssue]:
+    drift_value = contract_report.get("drift", [])
+    drift = drift_value if isinstance(drift_value, list) else []
+    return [
+        ValidationIssue(
+            code="CONTRACT_BREAKING_DRIFT",
+            message=str(item.get("message", "Breaking data-contract drift")),
+            record_id=str(item.get("scope", "unknown")),
+        )
+        for item in drift
+        if isinstance(item, dict) and item.get("kind") == "BREAKING"
+    ]
+
+
+def _write_quarantine(
+    *,
+    output_root: Path,
+    run_id: str,
+    issues: list[ValidationIssue],
+    contract_report: dict[str, Any] | None = None,
+) -> Path:
+    quarantine_directory = output_root / "quarantine" / run_id
+    quarantine_directory.mkdir(parents=True, exist_ok=True)
+    _write_json(quarantine_directory / "validation_issues.json", _issues_as_dicts(issues))
+    if contract_report is not None:
+        _write_json(quarantine_directory / "contract_report.json", contract_report)
+    return quarantine_directory
+
+
 def _build_cohort(
     clinical: NormalisedClinicalData,
-    manifest_rows: list[Any],
+    manifest_rows: list[GenomicManifestRow],
     secret: str,
 ) -> list[dict[str, Any]]:
     patient_to_person = {
@@ -123,9 +153,29 @@ def run_pipeline(
             people_count=int(existing_metrics["people_count"]),
             sample_count=int(existing_metrics["sample_count"]),
             issue_count=int(existing_metrics["issue_count"]),
+            warning_count=int(existing_metrics.get("contract_warning_count", 0)),
         )
 
-    bundle = json.loads(fhir_path.read_text(encoding="utf-8"))
+    bundle_value: Any = json.loads(fhir_path.read_text(encoding="utf-8"))
+    if not isinstance(bundle_value, dict):
+        issues = [ValidationIssue("FHIR_ROOT_INVALID", "FHIR input must be a JSON object")]
+        _write_quarantine(output_root=output_root, run_id=run_id, issues=issues)
+        raise ValueError("Delivery quarantined with 1 validation issue(s)")
+    bundle: dict[str, Any] = bundle_value
+
+    contract_report = evaluate_contract(bundle, genomic_manifest_path)
+    contract_issues = _breaking_contract_issues(contract_report)
+    if contract_issues:
+        _write_quarantine(
+            output_root=output_root,
+            run_id=run_id,
+            issues=contract_issues,
+            contract_report=contract_report,
+        )
+        raise ValueError(
+            f"Delivery quarantined with {len(contract_issues)} breaking contract issue(s)"
+        )
+
     fhir_issues = validate_bundle(bundle)
     manifest_rows = load_manifest(genomic_manifest_path)
     genomic_issues = validate_manifest(
@@ -136,9 +186,12 @@ def run_pipeline(
     )
     issues = [*fhir_issues, *genomic_issues]
     if issues:
-        quarantine_directory = output_root / "quarantine" / run_id
-        quarantine_directory.mkdir(parents=True, exist_ok=True)
-        _write_json(quarantine_directory / "validation_issues.json", _issues_as_dicts(issues))
+        _write_quarantine(
+            output_root=output_root,
+            run_id=run_id,
+            issues=issues,
+            contract_report=contract_report,
+        )
         raise ValueError(f"Delivery quarantined with {len(issues)} validation issue(s)")
 
     clinical = transform_bundle(bundle, secret_value)
@@ -191,9 +244,11 @@ def run_pipeline(
             "specimen_count": len(clinical.specimens),
             "sample_count": len(cohort),
             "issue_count": 0,
+            "contract_warning_count": int(contract_report["warning_count"]),
             "processing_time_ms": elapsed_ms,
         }
         _write_json(staging_directory / "metrics.json", metrics)
+        _write_json(staging_directory / "contract_report.json", contract_report)
         lineage = build_lineage_manifest(
             run_id=run_id,
             fhir_path=fhir_path,
@@ -201,6 +256,11 @@ def run_pipeline(
             genomic_files=genomic_files,
             metrics=metrics,
         )
+        lineage["data_contract"] = {
+            "version": contract_report["contract_version"],
+            "status": contract_report["status"],
+            "schema_fingerprint": contract_report["schema_fingerprint"],
+        }
         _write_json(staging_directory / "lineage.json", lineage)
         (staging_directory / "_SUCCESS").write_text("ok\n", encoding="utf-8")
 
@@ -218,4 +278,5 @@ def run_pipeline(
         people_count=len(clinical.people),
         sample_count=len(cohort),
         issue_count=0,
+        warning_count=int(contract_report["warning_count"]),
     )
