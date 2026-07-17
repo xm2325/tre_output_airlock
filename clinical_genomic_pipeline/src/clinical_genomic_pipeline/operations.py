@@ -29,7 +29,8 @@ def build_operations_summary(
     runs: list[dict[str, Any]] = []
     runs_root = output_root / "runs"
     if runs_root.is_dir():
-        for run_directory in sorted(path for path in runs_root.iterdir() if path.is_dir()):
+        run_directories = sorted(path for path in runs_root.iterdir() if path.is_dir())
+        for run_directory in run_directories:
             if not (run_directory / "_SUCCESS").is_file():
                 continue
             metrics = _read_json(run_directory / "metrics.json")
@@ -49,12 +50,18 @@ def build_operations_summary(
     quarantines: list[dict[str, Any]] = []
     quarantine_root = output_root / "quarantine"
     if quarantine_root.is_dir():
-        for quarantine_directory in sorted(
+        quarantine_directories = sorted(
             path for path in quarantine_root.iterdir() if path.is_dir()
-        ):
+        )
+        for quarantine_directory in quarantine_directories:
             issue_path = quarantine_directory / "validation_issues.json"
-            issue_values = json.loads(issue_path.read_text(encoding="utf-8")) if issue_path.is_file() else []
+            issue_values = (
+                json.loads(issue_path.read_text(encoding="utf-8"))
+                if issue_path.is_file()
+                else []
+            )
             issues = issue_values if isinstance(issue_values, list) else []
+            contract = _read_json(quarantine_directory / "contract_report.json")
             quarantines.append(
                 {
                     "run_id": quarantine_directory.name,
@@ -66,11 +73,7 @@ def build_operations_summary(
                             if isinstance(issue, dict)
                         }
                     ),
-                    "contract_status": str(
-                        _read_json(quarantine_directory / "contract_report.json").get(
-                            "status", "UNKNOWN"
-                        )
-                    ),
+                    "contract_status": str(contract.get("status", "UNKNOWN")),
                 }
             )
 
@@ -119,7 +122,10 @@ def build_operations_summary(
             {
                 "code": "INCOMPLETE_STAGING_PRESENT",
                 "severity": "ERROR",
-                "message": f"{incomplete_staging_count} incomplete staging directory or directories remain.",
+                "message": (
+                    f"{incomplete_staging_count} incomplete staging directory "
+                    "or directories remain."
+                ),
             }
         )
 
@@ -157,7 +163,7 @@ def render_operations_html(summary: dict[str, Any]) -> str:
         "<tr>"
         f"<td><code>{html.escape(str(item['run_id']))}</code></td>"
         f"<td>{int(item['issue_count'])}</td>"
-        f"<td>{html.escape(', '.join(str(code) for code in item['issue_codes']))}</td>"
+        f"<td>{html.escape(', '.join(map(str, item['issue_codes'])))}</td>"
         f"<td>{html.escape(str(item['contract_status']))}</td>"
         "</tr>"
         for item in summary.get("quarantines", [])
@@ -172,6 +178,14 @@ def render_operations_html(summary: dict[str, Any]) -> str:
         for alert in summary.get("alerts", [])
     ) or "<li>No active operational alerts.</li>"
 
+    generated_at = html.escape(str(summary["generated_at"]))
+    status = html.escape(str(summary["status"]))
+    success_rate = f"{float(summary['success_rate']):.1%}"
+    successful_count = int(summary["successful_count"])
+    quarantined_count = int(summary["quarantined_count"])
+    warning_count = int(summary["contract_warning_count"])
+    sample_count = int(summary["total_samples_published"])
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -179,42 +193,86 @@ def render_operations_html(summary: dict[str, Any]) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Clinical–Genomic Pipeline Operations</title>
   <style>
-    body {{ font-family: system-ui, sans-serif; margin: 0; background: #f4f6f8; color: #18212b; }}
+    body {{
+      font-family: system-ui, sans-serif;
+      margin: 0;
+      background: #f4f6f8;
+      color: #18212b;
+    }}
     main {{ max-width: 1120px; margin: auto; padding: 32px 20px 56px; }}
     h1, h2 {{ margin-bottom: 0.4rem; }}
     .muted {{ color: #52606d; }}
-    .cards {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin: 24px 0; }}
-    .card, section {{ background: white; border: 1px solid #d8dee5; border-radius: 10px; padding: 18px; }}
+    .cards {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 14px;
+      margin: 24px 0;
+    }}
+    .card, section {{
+      background: white;
+      border: 1px solid #d8dee5;
+      border-radius: 10px;
+      padding: 18px;
+    }}
     .value {{ font-size: 1.8rem; font-weight: 700; margin-top: 6px; }}
     section {{ margin-top: 18px; overflow-x: auto; }}
     table {{ width: 100%; border-collapse: collapse; }}
-    th, td {{ text-align: left; border-bottom: 1px solid #e7ebef; padding: 10px 8px; }}
-    th {{ font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04em; }}
+    th, td {{
+      text-align: left;
+      border-bottom: 1px solid #e7ebef;
+      padding: 10px 8px;
+    }}
+    th {{
+      font-size: 0.85rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }}
     code {{ font-size: 0.9em; }}
   </style>
 </head>
 <body>
 <main>
   <h1>Clinical–Genomic Pipeline Operations</h1>
-  <p class="muted">Generated {html.escape(str(summary['generated_at']))}. Synthetic demonstration data only.</p>
+  <p class="muted">Generated {generated_at}. Synthetic demonstration data only.</p>
   <div class="cards">
-    <div class="card"><div>Status</div><div class="value">{html.escape(str(summary['status']))}</div></div>
-    <div class="card"><div>Success rate</div><div class="value">{float(summary['success_rate']):.1%}</div></div>
-    <div class="card"><div>Successful runs</div><div class="value">{int(summary['successful_count'])}</div></div>
-    <div class="card"><div>Quarantined</div><div class="value">{int(summary['quarantined_count'])}</div></div>
-    <div class="card"><div>Contract warnings</div><div class="value">{int(summary['contract_warning_count'])}</div></div>
-    <div class="card"><div>Samples published</div><div class="value">{int(summary['total_samples_published'])}</div></div>
+    <div class="card"><div>Status</div><div class="value">{status}</div></div>
+    <div class="card">
+      <div>Success rate</div><div class="value">{success_rate}</div>
+    </div>
+    <div class="card">
+      <div>Successful runs</div><div class="value">{successful_count}</div>
+    </div>
+    <div class="card">
+      <div>Quarantined</div><div class="value">{quarantined_count}</div>
+    </div>
+    <div class="card">
+      <div>Contract warnings</div><div class="value">{warning_count}</div>
+    </div>
+    <div class="card">
+      <div>Samples published</div><div class="value">{sample_count}</div>
+    </div>
   </div>
   <section><h2>Alerts</h2><ul>{alert_items}</ul></section>
   <section>
     <h2>Successful runs</h2>
-    <table><thead><tr><th>Run</th><th>Samples</th><th>Contract</th><th>Warnings</th><th>Time (ms)</th></tr></thead>
-    <tbody>{run_rows}</tbody></table>
+    <table>
+      <thead>
+        <tr>
+          <th>Run</th><th>Samples</th><th>Contract</th>
+          <th>Warnings</th><th>Time (ms)</th>
+        </tr>
+      </thead>
+      <tbody>{run_rows}</tbody>
+    </table>
   </section>
   <section>
     <h2>Quarantine</h2>
-    <table><thead><tr><th>Run</th><th>Issues</th><th>Codes</th><th>Contract</th></tr></thead>
-    <tbody>{quarantine_rows}</tbody></table>
+    <table>
+      <thead>
+        <tr><th>Run</th><th>Issues</th><th>Codes</th><th>Contract</th></tr>
+      </thead>
+      <tbody>{quarantine_rows}</tbody>
+    </table>
   </section>
 </main>
 </body>
@@ -236,7 +294,8 @@ def main() -> None:
     summary = build_operations_summary(args.output, success_target=args.success_target)
     args.json.parent.mkdir(parents=True, exist_ok=True)
     args.html.parent.mkdir(parents=True, exist_ok=True)
-    args.json.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    json_text = json.dumps(summary, indent=2, sort_keys=True) + "\n"
+    args.json.write_text(json_text, encoding="utf-8")
     args.html.write_text(render_operations_html(summary), encoding="utf-8")
     print(json.dumps(summary, sort_keys=True))
 
