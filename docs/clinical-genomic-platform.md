@@ -2,7 +2,7 @@
 
 ## Decision summary
 
-The TRE Output Airlock already demonstrates controlled release after research analysis. This extension adds the upstream half of the data path: receiving synthetic clinical and genomic source data, checking delivery integrity, removing direct identifiers, producing research-ready tables and recording source lineage.
+The TRE Output Airlock already demonstrates controlled release after research analysis. This extension adds the upstream half of the data path: receiving synthetic clinical and genomic source data, checking delivery integrity and contract shape, removing direct identifiers, producing research-ready tables, recording source lineage and publishing operational evidence.
 
 ## User and operational questions
 
@@ -10,12 +10,15 @@ The TRE Output Airlock already demonstrates controlled release after research an
 |---|---|
 | Did the delivered genomic file arrive without alteration? | The manifest digest is checked against a streamed SHA-256 calculation. |
 | Do clinical resources and genomic rows refer to known people and specimens? | FHIR references and manifest foreign keys are checked before transformation. |
+| Did an upstream system change its schema? | A versioned contract classifies missing required fields as breaking drift and new fields as additive drift. |
+| Can a schema report expose patient values? | The fingerprint is derived from field names, resource types and manifest columns only. |
 | Can direct names or addresses enter the research-ready table? | The normaliser selects only allowed fields and replaces patient, specimen and sample identifiers. |
-| Can an incomplete run look successful? | Data is written to a staging directory and published atomically only after metrics and lineage are complete. |
-| What happens when validation fails? | The delivery is not published; machine-readable issues are written under quarantine. |
+| Can an incomplete run look successful? | Data is written to a staging directory and published atomically only after contract, metrics and lineage evidence are complete. |
+| What happens when validation fails? | The delivery is not published; machine-readable issues and the contract report are written under quarantine. |
 | Can the same delivery be processed twice? | A run ID is derived from source digests and pipeline version, and `_SUCCESS` causes safe reuse. |
-| Can an operator trace an output to source files and code? | `lineage.json` records source paths, sizes, digests, configuration digest and code revision. |
+| Can an operator trace an output to source files and code? | `lineage.json` records source paths, sizes, digests, configuration digest, code revision and contract fingerprint. |
 | Is the raw-to-pseudonym link mixed with research data? | It is written to a separate restricted zone and excluded from the gold cohort. |
+| Can an operator see success and quarantine state without opening every run? | The operations command builds a JSON summary and portable HTML dashboard. |
 
 ## Data contract
 
@@ -39,6 +42,18 @@ assembly
 
 The patient and specimen fields act as foreign keys into the FHIR delivery. `GRCh37` and `GRCh38` are accepted in the demo.
 
+### Drift policy
+
+The contract has three outcomes:
+
+| Status | Meaning | Action |
+|---|---|---|
+| `PASS` | Observed field shape matches the supported contract | Continue normal validation |
+| `WARN` | Only additive fields or columns were observed | Publish with recorded warning evidence |
+| `FAIL` | A required field or column is missing | Quarantine before transformation |
+
+Each accepted run records the contract version and a SHA-256 schema fingerprint. This makes a source-system change visible in lineage and CI without copying clinical values into monitoring outputs.
+
 ## De-identification boundary
 
 The package demonstrates four controls:
@@ -56,11 +71,26 @@ This is not a complete anonymisation method. A production service would need a f
 - path resolution blocks manifest entries that escape the delivery directory;
 - duplicate resource and sample IDs fail validation;
 - source-reference checks run before any join;
+- breaking contract drift fails before manifest loading or transformation;
+- additive contract drift remains visible in metrics and lineage;
 - staging plus atomic rename prevents partial publication;
 - a successful run can be replayed without duplicate output;
 - Prefect separates the delivery task and supplies retry policy;
-- metrics and lineage are produced for each successful run;
-- CI runs both a valid delivery and an invalid-checksum case.
+- metrics, contract evidence and lineage are produced for each successful run;
+- CI runs valid, invalid-checksum, additive-drift and breaking-drift cases.
+
+## Operational evidence
+
+The operations command scans the same evidence that the pipeline already writes. It reports:
+
+- successful and quarantined delivery counts;
+- success rate against a configurable target;
+- published sample count;
+- contract warning count;
+- incomplete staging directories;
+- issue codes for each quarantined delivery.
+
+It creates JSON for later integration and a static HTML page for review. Alerts are produced for a low success rate, quarantine activity, contract warnings or incomplete staging. This is a local demonstration, not central production monitoring.
 
 ## AWS mapping
 
@@ -75,7 +105,7 @@ The Terraform baseline maps local zones to managed services:
 | pending delivery | encrypted SQS queue |
 | repeated failure | encrypted dead-letter queue |
 
-A production design would add private endpoints, workload identity, per-zone roles, object-lock choices, CloudTrail data events, CloudWatch alerts, malware scanning and central security monitoring.
+A production design would add private endpoints, workload identity, per-zone roles, object-lock choices, CloudTrail data events, CloudWatch metrics and alerts, malware scanning and central security monitoring.
 
 ## Relation to the existing Airlock
 

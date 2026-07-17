@@ -36,6 +36,7 @@ def main() -> None:
                 "people_count": result.people_count,
                 "sample_count": result.sample_count,
                 "issue_count": result.issue_count,
+                "warning_count": result.warning_count,
             },
             sort_keys=True,
         )
