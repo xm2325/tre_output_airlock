@@ -9,6 +9,7 @@ on:
       - "docs/clinical-genomic-platform.md"
       - "docs/adr/0005-clinical-genomic-data-contract.md"
       - "docs/adr/0006-contract-drift-and-operations.md"
+      - "docs/adr/0007-jd-data-engineering-services.md"
       - ".github/workflows/clinical-genomic-pipeline.yml"
   pull_request:
     paths:
@@ -17,6 +18,7 @@ on:
       - "docs/clinical-genomic-platform.md"
       - "docs/adr/0005-clinical-genomic-data-contract.md"
       - "docs/adr/0006-contract-drift-and-operations.md"
+      - "docs/adr/0007-jd-data-engineering-services.md"
       - ".github/workflows/clinical-genomic-pipeline.yml"
   workflow_dispatch:
 
@@ -43,11 +45,45 @@ jobs:
       - name: Install package and checks
         run: python -m pip install -e '.[dev,orchestration]'
       - name: Ruff
-        run: ruff check src tests
+        run: |
+          mkdir -p build/diagnostics
+          ruff check src tests --output-format=json > build/diagnostics/ruff.json || true
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          diagnostics = json.loads(Path("build/diagnostics/ruff.json").read_text())
+          for item in diagnostics:
+              location = item["location"]
+              print(
+                  f"{item['filename']}:{location['row']}:{location['column']} "
+                  f"{item['code']} {item['message']}"
+              )
+          raise SystemExit(1 if diagnostics else 0)
+          PY
+      - name: Upload Ruff diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clinical-genomic-ruff-diagnostics
+          path: clinical_genomic_pipeline/build/diagnostics/ruff.json
       - name: MyPy
         run: mypy src
       - name: Unit tests
         run: python -m unittest discover -s tests -v
+      - name: Build receiver-side transfer receipt
+        run: |
+          clinical-genomic-transfer-receipt \
+            --delivery-root samples \
+            --file fhir_bundle.json \
+            --file genomic_manifest.csv \
+            --file genomics/sample_001.vcf \
+            --output build/transfer-receipt.json \
+            --tool GLOBUS \
+            --transfer-id ci-globus-transfer-001 \
+            --source-endpoint synthetic-nhs-source \
+            --destination-endpoint synthetic-landing-zone \
+            > build-transfer.json
       - name: Run valid synthetic delivery twice
         env:
           PIPELINE_PSEUDONYMISATION_SECRET: ci-only-secret-at-least-16-characters
@@ -55,10 +91,14 @@ jobs:
           clinical-genomic-pipeline \
             --fhir samples/fhir_bundle.json \
             --manifest samples/genomic_manifest.csv \
+            --transfer-receipt build/transfer-receipt.json \
+            --terminology-map reference/terminology_map.csv \
             --output build/ci > build-first.json
           clinical-genomic-pipeline \
             --fhir samples/fhir_bundle.json \
             --manifest samples/genomic_manifest.csv \
+            --transfer-receipt build/transfer-receipt.json \
+            --terminology-map reference/terminology_map.csv \
             --output build/ci > build-second.json
           python - <<'PY'
           import json
@@ -71,6 +111,23 @@ jobs:
           assert first["run_id"] == second["run_id"]
           assert first["warning_count"] == 0
           PY
+      - name: Run Prefect staged orchestration
+        env:
+          PREFECT_LOGGING_LEVEL: WARNING
+        run: |
+          python - <<'PY'
+          from clinical_genomic_pipeline.flow import clinical_genomic_flow
+
+          result = clinical_genomic_flow(
+              "samples/fhir_bundle.json",
+              "samples/genomic_manifest.csv",
+              "build/transfer-receipt.json",
+              "reference/terminology_map.csv",
+              "build/ci",
+              "ci-only-secret-at-least-16-characters",
+          )
+          assert result.reused_existing_run is True
+          PY
       - name: Assert direct identifiers are absent from research zone
         run: |
           if grep -R -E 'patient-001|specimen-001|sample-001|Synthetic|Exampletown|ZZ1 1ZZ' \
@@ -78,7 +135,7 @@ jobs:
             echo "Direct identifier found in a research-ready zone"
             exit 1
           fi
-      - name: Build operations evidence
+      - name: Build operations and AWS publication evidence
         run: |
           clinical-genomic-operations \
             --output build/ci \
@@ -87,31 +144,53 @@ jobs:
           python - <<'PY'
           import json
           from pathlib import Path
+          from clinical_genomic_pipeline.storage import build_curated_publish_plan
 
           summary = json.loads(Path("build/ci/operations-summary.json").read_text())
-          contract_files = list(Path("build/ci/runs").glob("*/contract_report.json"))
+          run_directory = next(Path("build/ci/runs").iterdir())
+          contract = json.loads((run_directory / "contract_report.json").read_text())
+          quality = json.loads((run_directory / "data_quality_report.json").read_text())
+          transfer = json.loads((run_directory / "transfer_report.json").read_text())
+          plan = build_curated_publish_plan(
+              run_directory=run_directory,
+              bucket="synthetic-curated-bucket",
+              prefix="clinical-genomic",
+          )
+          Path("build/ci/curated-publish-plan.json").write_text(
+              json.dumps(plan, indent=2, sort_keys=True) + "\n"
+          )
           assert summary["status"] == "HEALTHY"
           assert summary["successful_count"] == 1
           assert summary["quarantined_count"] == 0
-          assert summary["contract_warning_count"] == 0
-          assert len(contract_files) == 1
-          contract = json.loads(contract_files[0].read_text())
+          assert summary["warning_count"] == 0
           assert contract["status"] == "PASS"
           assert len(contract["schema_fingerprint"]) == 64
+          assert quality["status"] == "PASS"
+          assert quality["terminology"]["mapping_coverage"] == 1.0
+          assert transfer["status"] == "PASS"
+          assert transfer["tool"] == "GLOBUS"
+          assert any("gold/omop/person.csv" in item["source_path"] for item in plan)
+          assert not any("restricted" in item["source_path"] for item in plan)
           PY
       - name: Upload run evidence
         uses: actions/upload-artifact@v4
         with:
           name: clinical-genomic-run-evidence
           path: |
+            clinical_genomic_pipeline/build-transfer.json
             clinical_genomic_pipeline/build-first.json
             clinical_genomic_pipeline/build-second.json
+            clinical_genomic_pipeline/build/transfer-receipt.json
             clinical_genomic_pipeline/build/ci/operations-summary.json
             clinical_genomic_pipeline/build/ci/operations-dashboard.html
+            clinical_genomic_pipeline/build/ci/curated-publish-plan.json
             clinical_genomic_pipeline/build/ci/runs/*/contract_report.json
+            clinical_genomic_pipeline/build/ci/runs/*/transfer_report.json
+            clinical_genomic_pipeline/build/ci/runs/*/data_quality_report.json
             clinical_genomic_pipeline/build/ci/runs/*/lineage.json
             clinical_genomic_pipeline/build/ci/runs/*/metrics.json
             clinical_genomic_pipeline/build/ci/runs/*/gold/research_cohort.csv
+            clinical_genomic_pipeline/build/ci/runs/*/gold/omop/*.csv
 
   terraform:
     runs-on: ubuntu-latest

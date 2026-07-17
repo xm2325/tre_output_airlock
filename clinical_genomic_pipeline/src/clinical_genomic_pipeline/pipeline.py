@@ -17,6 +17,46 @@ from .genomics import load_manifest, validate_manifest
 from .hashing import pseudonymise, sha256_file, sha256_text
 from .lineage import build_lineage_manifest
 from .models import GenomicManifestRow, NormalisedClinicalData, PipelineResult, ValidationIssue
+from .omop import build_omop_quality_report, build_omop_tables
+from .terminology import build_terminology_report, load_terminology_map
+from .transfer import validate_transfer_receipt
+
+_PIPELINE_VERSION = "0.3.0"
+_OMOP_FIELDS = {
+    "person": [
+        "person_id",
+        "gender_concept_id",
+        "year_of_birth",
+        "person_source_value",
+        "gender_source_value",
+    ],
+    "condition_occurrence": [
+        "condition_occurrence_id",
+        "person_id",
+        "condition_concept_id",
+        "condition_start_date",
+        "condition_source_value",
+        "condition_source_vocabulary",
+        "mapping_status",
+    ],
+    "measurement": [
+        "measurement_id",
+        "person_id",
+        "measurement_concept_id",
+        "measurement_date",
+        "value_as_number",
+        "unit_source_value",
+        "measurement_source_value",
+        "measurement_source_vocabulary",
+        "mapping_status",
+    ],
+    "specimen": [
+        "specimen_id",
+        "person_id",
+        "specimen_date",
+        "specimen_source_value",
+    ],
+}
 
 
 def _write_json(path: Path, value: Any) -> None:
@@ -44,12 +84,19 @@ def _resource_ids(bundle: dict[str, Any], resource_type: str) -> set[str]:
     }
 
 
-def _run_id(fhir_path: Path, manifest_path: Path) -> str:
+def _run_id(
+    fhir_path: Path,
+    manifest_path: Path,
+    transfer_receipt_path: Path,
+    terminology_map_path: Path,
+) -> str:
     material = "|".join(
         [
-            "pipeline-version=0.2.0",
+            f"pipeline-version={_PIPELINE_VERSION}",
             sha256_file(fhir_path),
             sha256_file(manifest_path),
+            sha256_file(transfer_receipt_path),
+            sha256_file(terminology_map_path),
         ]
     )
     return sha256_text(material)[:16]
@@ -87,12 +134,18 @@ def _write_quarantine(
     run_id: str,
     issues: list[ValidationIssue],
     contract_report: dict[str, Any] | None = None,
+    transfer_report: dict[str, Any] | None = None,
+    data_quality_report: dict[str, Any] | None = None,
 ) -> Path:
     quarantine_directory = output_root / "quarantine" / run_id
     quarantine_directory.mkdir(parents=True, exist_ok=True)
     _write_json(quarantine_directory / "validation_issues.json", _issues_as_dicts(issues))
     if contract_report is not None:
         _write_json(quarantine_directory / "contract_report.json", contract_report)
+    if transfer_report is not None:
+        _write_json(quarantine_directory / "transfer_report.json", transfer_report)
+    if data_quality_report is not None:
+        _write_json(quarantine_directory / "data_quality_report.json", data_quality_report)
     return quarantine_directory
 
 
@@ -123,10 +176,12 @@ def run_pipeline(
     *,
     fhir_path: Path,
     genomic_manifest_path: Path,
+    transfer_receipt_path: Path,
+    terminology_map_path: Path,
     output_root: Path,
     secret: str | None = None,
 ) -> PipelineResult:
-    """Validate, de-identify, join and publish one synthetic delivery."""
+    """Validate, de-identify, standardise and publish one synthetic delivery."""
     start = time.perf_counter()
     secret_value: str = secret if secret is not None else (
         os.getenv("PIPELINE_PSEUDONYMISATION_SECRET") or ""
@@ -136,10 +191,17 @@ def run_pipeline(
 
     fhir_path = fhir_path.resolve()
     genomic_manifest_path = genomic_manifest_path.resolve()
+    transfer_receipt_path = transfer_receipt_path.resolve()
+    terminology_map_path = terminology_map_path.resolve()
     delivery_directory = genomic_manifest_path.parent
     output_root.mkdir(parents=True, exist_ok=True)
 
-    run_id = _run_id(fhir_path, genomic_manifest_path)
+    run_id = _run_id(
+        fhir_path,
+        genomic_manifest_path,
+        transfer_receipt_path,
+        terminology_map_path,
+    )
     final_directory = output_root / "runs" / run_id
     success_marker = final_directory / "_SUCCESS"
     if success_marker.is_file():
@@ -153,7 +215,7 @@ def run_pipeline(
             people_count=int(existing_metrics["people_count"]),
             sample_count=int(existing_metrics["sample_count"]),
             issue_count=int(existing_metrics["issue_count"]),
-            warning_count=int(existing_metrics.get("contract_warning_count", 0)),
+            warning_count=int(existing_metrics.get("warning_count", 0)),
         )
 
     bundle_value: Any = json.loads(fhir_path.read_text(encoding="utf-8"))
@@ -176,8 +238,27 @@ def run_pipeline(
             f"Delivery quarantined with {len(contract_issues)} breaking contract issue(s)"
         )
 
-    fhir_issues = validate_bundle(bundle)
     manifest_rows = load_manifest(genomic_manifest_path)
+    genomic_files = [(delivery_directory / row.vcf_path).resolve() for row in manifest_rows]
+    expected_files = [fhir_path, genomic_manifest_path, *genomic_files]
+    transfer_report, transfer_issues = validate_transfer_receipt(
+        receipt_path=transfer_receipt_path,
+        delivery_root=delivery_directory,
+        expected_files=expected_files,
+    )
+    if transfer_issues:
+        _write_quarantine(
+            output_root=output_root,
+            run_id=run_id,
+            issues=transfer_issues,
+            contract_report=contract_report,
+            transfer_report=transfer_report,
+        )
+        raise ValueError(
+            f"Delivery quarantined with {len(transfer_issues)} transfer issue(s)"
+        )
+
+    fhir_issues = validate_bundle(bundle)
     genomic_issues = validate_manifest(
         manifest_rows,
         delivery_directory,
@@ -191,12 +272,48 @@ def run_pipeline(
             run_id=run_id,
             issues=issues,
             contract_report=contract_report,
+            transfer_report=transfer_report,
         )
         raise ValueError(f"Delivery quarantined with {len(issues)} validation issue(s)")
 
     clinical = transform_bundle(bundle, secret_value)
     cohort = _build_cohort(clinical, manifest_rows, secret_value)
-    genomic_files = [(delivery_directory / row.vcf_path).resolve() for row in manifest_rows]
+    terminology_map = load_terminology_map(terminology_map_path)
+    terminology_report = build_terminology_report(
+        clinical.conditions,
+        clinical.measurements,
+        terminology_map,
+    )
+    omop_tables = build_omop_tables(clinical, terminology_map)
+    omop_quality = build_omop_quality_report(omop_tables)
+    data_quality_status = (
+        "FAIL"
+        if omop_quality["status"] == "FAIL"
+        else "WARN"
+        if terminology_report["status"] == "WARN"
+        else "PASS"
+    )
+    data_quality_report: dict[str, Any] = {
+        "status": data_quality_status,
+        "omop_model": omop_quality,
+        "terminology": terminology_report,
+    }
+    if data_quality_status == "FAIL":
+        quality_issues = [
+            ValidationIssue(
+                "OMOP_DATA_QUALITY_FAILED",
+                "OMOP-aligned output failed required field or relationship checks",
+            )
+        ]
+        _write_quarantine(
+            output_root=output_root,
+            run_id=run_id,
+            issues=quality_issues,
+            contract_report=contract_report,
+            transfer_report=transfer_report,
+            data_quality_report=data_quality_report,
+        )
+        raise ValueError("Delivery quarantined after OMOP data-quality checks")
 
     (output_root / "runs").mkdir(parents=True, exist_ok=True)
     temporary_parent = output_root / ".staging"
@@ -206,12 +323,15 @@ def run_pipeline(
         bronze = staging_directory / "bronze"
         silver = staging_directory / "silver"
         gold = staging_directory / "gold"
+        omop_directory = gold / "omop"
         restricted = staging_directory / "restricted"
-        for directory in (bronze, silver, gold, restricted):
+        for directory in (bronze, silver, gold, omop_directory, restricted):
             directory.mkdir(parents=True, exist_ok=True)
 
         shutil.copy2(fhir_path, bronze / "fhir_bundle.json")
         shutil.copy2(genomic_manifest_path, bronze / "genomic_manifest.csv")
+        shutil.copy2(transfer_receipt_path, bronze / "transfer_receipt.json")
+        shutil.copy2(terminology_map_path, bronze / "terminology_map.csv")
         _write_jsonl(silver / "person.jsonl", clinical.people)
         _write_jsonl(silver / "condition.jsonl", clinical.conditions)
         _write_jsonl(silver / "measurement.jsonl", clinical.measurements)
@@ -221,6 +341,12 @@ def run_pipeline(
             cohort,
             ["sample_id", "person_id", "specimen_id", "assembly", "genomic_file_sha256"],
         )
+        for table_name, records in omop_tables.items():
+            _write_csv(
+                omop_directory / f"{table_name}.csv",
+                records,
+                _OMOP_FIELDS[table_name],
+            )
         _write_csv(
             restricted / "patient_linkage.csv",
             clinical.patient_linkage,
@@ -237,6 +363,9 @@ def run_pipeline(
         )
 
         elapsed_ms = round((time.perf_counter() - start) * 1000, 3)
+        contract_warning_count = int(contract_report["warning_count"])
+        terminology_warning_count = int(terminology_report["review_required_count"])
+        warning_count = contract_warning_count + terminology_warning_count
         metrics: dict[str, Any] = {
             "people_count": len(clinical.people),
             "condition_count": len(clinical.conditions),
@@ -244,11 +373,19 @@ def run_pipeline(
             "specimen_count": len(clinical.specimens),
             "sample_count": len(cohort),
             "issue_count": 0,
-            "contract_warning_count": int(contract_report["warning_count"]),
+            "warning_count": warning_count,
+            "contract_warning_count": contract_warning_count,
+            "terminology_review_required_count": terminology_warning_count,
+            "terminology_mapping_coverage": terminology_report["mapping_coverage"],
+            "data_quality_status": data_quality_status,
+            "transfer_total_bytes": transfer_report["total_bytes"],
+            "transfer_retry_count": transfer_report["retry_count"],
             "processing_time_ms": elapsed_ms,
         }
         _write_json(staging_directory / "metrics.json", metrics)
         _write_json(staging_directory / "contract_report.json", contract_report)
+        _write_json(staging_directory / "transfer_report.json", transfer_report)
+        _write_json(staging_directory / "data_quality_report.json", data_quality_report)
         lineage = build_lineage_manifest(
             run_id=run_id,
             fhir_path=fhir_path,
@@ -260,6 +397,16 @@ def run_pipeline(
             "version": contract_report["contract_version"],
             "status": contract_report["status"],
             "schema_fingerprint": contract_report["schema_fingerprint"],
+        }
+        lineage["secure_transfer"] = {
+            "transfer_id": transfer_report["transfer_id"],
+            "tool": transfer_report["tool"],
+            "status": transfer_report["status"],
+        }
+        lineage["clinical_model"] = {
+            "name": "OMOP-aligned synthetic subset",
+            "quality_status": data_quality_status,
+            "terminology_mapping_coverage": terminology_report["mapping_coverage"],
         }
         _write_json(staging_directory / "lineage.json", lineage)
         (staging_directory / "_SUCCESS").write_text("ok\n", encoding="utf-8")
@@ -278,5 +425,5 @@ def run_pipeline(
         people_count=len(clinical.people),
         sample_count=len(cohort),
         issue_count=0,
-        warning_count=int(contract_report["warning_count"]),
+        warning_count=warning_count,
     )

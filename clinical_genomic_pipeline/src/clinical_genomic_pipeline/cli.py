@@ -14,6 +14,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the synthetic clinical-genomic pipeline")
     parser.add_argument("--fhir", type=Path, required=True)
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--transfer-receipt", type=Path, required=True)
+    parser.add_argument("--terminology-map", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--secret", default=os.getenv("PIPELINE_PSEUDONYMISATION_SECRET"))
     return parser
@@ -24,6 +26,8 @@ def main() -> None:
     result = run_pipeline(
         fhir_path=args.fhir,
         genomic_manifest_path=args.manifest,
+        transfer_receipt_path=args.transfer_receipt,
+        terminology_map_path=args.terminology_map,
         output_root=args.output,
         secret=args.secret,
     )
