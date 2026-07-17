@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 try:
     from prefect import flow, task
@@ -38,7 +39,10 @@ def clinical_genomic_flow(
     secret: str,
 ) -> PipelineResult:
     """Orchestrate one clinical-genomic delivery."""
-    result = process_delivery(fhir_path, genomic_manifest_path, output_root, secret)
+    result = cast(
+        PipelineResult,
+        process_delivery(fhir_path, genomic_manifest_path, output_root, secret),
+    )
     print(
         f"run_id={result.run_id} people={result.people_count} "
         f"samples={result.sample_count} reused={result.reused_existing_run}"
