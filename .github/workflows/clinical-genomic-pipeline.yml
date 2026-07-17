@@ -8,6 +8,7 @@ on:
       - "infra/aws/clinical_genomic/**"
       - "docs/clinical-genomic-platform.md"
       - "docs/adr/0005-clinical-genomic-data-contract.md"
+      - "docs/adr/0006-contract-drift-and-operations.md"
       - ".github/workflows/clinical-genomic-pipeline.yml"
   pull_request:
     paths:
@@ -15,6 +16,7 @@ on:
       - "infra/aws/clinical_genomic/**"
       - "docs/clinical-genomic-platform.md"
       - "docs/adr/0005-clinical-genomic-data-contract.md"
+      - "docs/adr/0006-contract-drift-and-operations.md"
       - ".github/workflows/clinical-genomic-pipeline.yml"
   workflow_dispatch:
 
@@ -67,6 +69,7 @@ jobs:
           assert first["reused_existing_run"] is False
           assert second["reused_existing_run"] is True
           assert first["run_id"] == second["run_id"]
+          assert first["warning_count"] == 0
           PY
       - name: Assert direct identifiers are absent from research zone
         run: |
@@ -75,6 +78,27 @@ jobs:
             echo "Direct identifier found in a research-ready zone"
             exit 1
           fi
+      - name: Build operations evidence
+        run: |
+          clinical-genomic-operations \
+            --output build/ci \
+            --json build/ci/operations-summary.json \
+            --html build/ci/operations-dashboard.html
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          summary = json.loads(Path("build/ci/operations-summary.json").read_text())
+          contract_files = list(Path("build/ci/runs").glob("*/contract_report.json"))
+          assert summary["status"] == "HEALTHY"
+          assert summary["successful_count"] == 1
+          assert summary["quarantined_count"] == 0
+          assert summary["contract_warning_count"] == 0
+          assert len(contract_files) == 1
+          contract = json.loads(contract_files[0].read_text())
+          assert contract["status"] == "PASS"
+          assert len(contract["schema_fingerprint"]) == 64
+          PY
       - name: Upload run evidence
         uses: actions/upload-artifact@v4
         with:
@@ -82,6 +106,9 @@ jobs:
           path: |
             clinical_genomic_pipeline/build-first.json
             clinical_genomic_pipeline/build-second.json
+            clinical_genomic_pipeline/build/ci/operations-summary.json
+            clinical_genomic_pipeline/build/ci/operations-dashboard.html
+            clinical_genomic_pipeline/build/ci/runs/*/contract_report.json
             clinical_genomic_pipeline/build/ci/runs/*/lineage.json
             clinical_genomic_pipeline/build/ci/runs/*/metrics.json
             clinical_genomic_pipeline/build/ci/runs/*/gold/research_cohort.csv
