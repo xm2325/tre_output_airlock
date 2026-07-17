@@ -1,4 +1,4 @@
-"""Transfer-receipt creation and validation for delivered clinical-genomic files."""
+"""Transfer-receipt creation and validation for clinical-genomic files."""
 
 from __future__ import annotations
 
@@ -32,10 +32,11 @@ def build_transfer_receipt(
     source_endpoint: str,
     destination_endpoint: str,
 ) -> dict[str, Any]:
-    """Create receiver-side transfer evidence from files present in a delivery directory."""
+    """Create receiver-side transfer evidence for files in a delivery directory."""
     tool_value = tool.upper()
     if tool_value not in _ALLOWED_TOOLS:
-        raise ValueError(f"tool must be one of: {', '.join(sorted(_ALLOWED_TOOLS))}")
+        allowed = ", ".join(sorted(_ALLOWED_TOOLS))
+        raise ValueError(f"tool must be one of: {allowed}")
     if not transfer_id.strip():
         raise ValueError("transfer_id must not be empty")
 
@@ -69,8 +70,14 @@ def build_transfer_receipt(
         "files": files,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    output_text = json.dumps(receipt, indent=2, sort_keys=True) + "\n"
+    output_path.write_text(output_text, encoding="utf-8")
     return receipt
+
+
+def _invalid_report(code: str, message: str) -> tuple[dict[str, Any], list[ValidationIssue]]:
+    report = {"status": "FAIL", "schema_version": "transfer-receipt/1.0"}
+    return report, [ValidationIssue(code, message)]
 
 
 def validate_transfer_receipt(
@@ -79,26 +86,37 @@ def validate_transfer_receipt(
     delivery_root: Path,
     expected_files: list[Path],
 ) -> tuple[dict[str, Any], list[ValidationIssue]]:
-    """Check transfer status, file coverage, byte counts, paths and receiver-side digests."""
+    """Check transfer status, coverage, byte counts, paths and receiver digests."""
     issues: list[ValidationIssue] = []
     if not receipt_path.is_file():
-        report = {"status": "FAIL", "schema_version": "transfer-receipt/1.0"}
-        return report, [ValidationIssue("TRANSFER_RECEIPT_MISSING", "Transfer receipt is missing")]
+        return _invalid_report(
+            "TRANSFER_RECEIPT_MISSING",
+            "Transfer receipt is missing",
+        )
 
     value: Any = json.loads(receipt_path.read_text(encoding="utf-8"))
     if not isinstance(value, dict):
-        report = {"status": "FAIL", "schema_version": "transfer-receipt/1.0"}
-        return report, [ValidationIssue("TRANSFER_RECEIPT_INVALID", "Transfer receipt must be an object")]
+        return _invalid_report(
+            "TRANSFER_RECEIPT_INVALID",
+            "Transfer receipt must be an object",
+        )
     receipt: dict[str, Any] = value
 
     tool = str(receipt.get("tool", "")).upper()
     if tool not in _ALLOWED_TOOLS:
+        tool_label = tool or "missing"
         issues.append(
-            ValidationIssue("TRANSFER_TOOL_UNSUPPORTED", f"Unsupported transfer tool: {tool or 'missing'}")
+            ValidationIssue(
+                "TRANSFER_TOOL_UNSUPPORTED",
+                f"Unsupported transfer tool: {tool_label}",
+            )
         )
     if receipt.get("status") != "COMPLETED":
         issues.append(
-            ValidationIssue("TRANSFER_NOT_COMPLETED", "Transfer receipt status must be COMPLETED")
+            ValidationIssue(
+                "TRANSFER_NOT_COMPLETED",
+                "Transfer receipt status must be COMPLETED",
+            )
         )
 
     file_values = receipt.get("files")
@@ -196,14 +214,19 @@ def validate_transfer_receipt(
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Build receiver-side transfer evidence")
+    parser = argparse.ArgumentParser(
+        description="Build receiver-side transfer evidence"
+    )
     parser.add_argument("--delivery-root", type=Path, required=True)
     parser.add_argument("--file", action="append", dest="files", required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--tool", choices=sorted(_ALLOWED_TOOLS), required=True)
     parser.add_argument("--transfer-id", required=True)
     parser.add_argument("--source-endpoint", default="synthetic-source")
-    parser.add_argument("--destination-endpoint", default="synthetic-landing-zone")
+    parser.add_argument(
+        "--destination-endpoint",
+        default="synthetic-landing-zone",
+    )
     return parser
 
 
