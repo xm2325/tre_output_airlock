@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "clinical-genomic-ingestion-demo"
-version = "0.1.0"
+version = "0.2.0"
 description = "Synthetic clinical-genomic ingestion, validation, de-identification and lineage demo."
 requires-python = ">=3.11"
 dependencies = []
@@ -18,6 +18,7 @@ dev = [
 
 [project.scripts]
 clinical-genomic-pipeline = "clinical_genomic_pipeline.cli:main"
+clinical-genomic-operations = "clinical_genomic_pipeline.operations:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
