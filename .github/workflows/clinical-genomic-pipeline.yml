@@ -45,7 +45,28 @@ jobs:
       - name: Install package and checks
         run: python -m pip install -e '.[dev,orchestration]'
       - name: Ruff
-        run: ruff check src tests
+        run: |
+          mkdir -p build/diagnostics
+          ruff check src tests --output-format=json > build/diagnostics/ruff.json || true
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          diagnostics = json.loads(Path("build/diagnostics/ruff.json").read_text())
+          for item in diagnostics:
+              location = item["location"]
+              print(
+                  f"{item['filename']}:{location['row']}:{location['column']} "
+                  f"{item['code']} {item['message']}"
+              )
+          raise SystemExit(1 if diagnostics else 0)
+          PY
+      - name: Upload Ruff diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: clinical-genomic-ruff-diagnostics
+          path: clinical_genomic_pipeline/build/diagnostics/ruff.json
       - name: MyPy
         run: mypy src
       - name: Unit tests
