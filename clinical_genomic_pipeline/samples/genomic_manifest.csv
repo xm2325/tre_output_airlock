@@ -1,0 +1,2 @@
+sample_id,patient_reference,specimen_reference,vcf_path,expected_sha256,assembly
+sample-001,patient-001,specimen-001,genomics/sample_001.vcf,bc5907ade3ba33177dea7b330e98a8643fcef97e8b49d6a1a82d9c0de5695818,GRCh38
