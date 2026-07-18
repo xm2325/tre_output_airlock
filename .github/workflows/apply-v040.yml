@@ -18,7 +18,7 @@ jobs:
       github.event.pull_request.head.ref == 'agent/v040-synthetic-evaluation'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: agent/v040-synthetic-evaluation
           fetch-depth: 0
