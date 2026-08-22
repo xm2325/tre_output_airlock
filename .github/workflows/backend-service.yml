@@ -1,0 +1,61 @@
+name: AWS backend service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "infra/aws/backend_service/**"
+      - "docs/identity-and-backend-platform.md"
+      - ".github/workflows/backend-service.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "infra/aws/backend_service/**"
+      - "docs/identity-and-backend-platform.md"
+      - ".github/workflows/backend-service.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aws-backend-service-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: infra/aws/backend_service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  backend-contract:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --all-extras
+      - run: uv run ruff check app tests alembic
+      - run: uv run mypy app
+      - run: uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=90
+      - name: Verify entrypoint syntax
+        run: sh -n entrypoint.sh
