@@ -135,13 +135,13 @@ resource "aws_db_instance" "airlock" {
   db_subnet_group_name   = aws_db_subnet_group.airlock.name
   vpc_security_group_ids = [aws_security_group.database.id]
 
-  backup_retention_period = var.environment == "prod" ? 14 : 7
-  deletion_protection      = var.environment == "prod"
-  skip_final_snapshot      = var.environment != "prod"
+  backup_retention_period   = var.environment == "prod" ? 14 : 7
+  deletion_protection       = var.environment == "prod"
+  skip_final_snapshot       = var.environment != "prod"
   final_snapshot_identifier = var.environment == "prod" ? "${local.name_prefix}-final" : null
 
   auto_minor_version_upgrade = true
-  apply_immediately           = var.environment != "prod"
+  apply_immediately          = var.environment != "prod"
 }
 
 # -----------------------------------------------------------------------------
