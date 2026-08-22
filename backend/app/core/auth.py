@@ -140,10 +140,12 @@ def _actor_from_introspection_claims(
 
     expiry = claims.get("exp")
     if expiry is not None:
+        if not isinstance(expiry, (int, float, str)):
+            raise _http_error(status.HTTP_401_UNAUTHORIZED, "Token expiry claim is invalid.")
         try:
             if float(expiry) <= time():
                 raise _http_error(status.HTTP_401_UNAUTHORIZED, "Bearer token has expired.")
-        except (TypeError, ValueError) as exc:
+        except ValueError as exc:
             raise _http_error(
                 status.HTTP_401_UNAUTHORIZED,
                 "Token expiry claim is invalid.",
