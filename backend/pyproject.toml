@@ -12,7 +12,7 @@ dependencies = [
   "uvicorn[standard]>=0.34,<1.0",
   "sqlalchemy>=2.0,<3.0",
   "python-multipart>=0.0.20,<1.0",
-  "pypdf>=5.4,<7.0",
+  "pypdf>=6.15,<7.0",
   "pillow>=11.1,<13.0",
   "psycopg[binary]>=3.2,<4.0",
   "alembic>=1.14,<2.0",
@@ -25,6 +25,7 @@ dev = [
   "pytest-cov>=6.0,<8.0",
   "ruff>=0.9,<1.0",
   "mypy>=1.14,<2.0",
+  "pip>=26.2,<27.0",
   "pip-audit>=2.7,<3.0",
 ]
 
