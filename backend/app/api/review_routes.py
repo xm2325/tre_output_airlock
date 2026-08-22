@@ -134,7 +134,7 @@ def claim_submission(
         )
 
     cutoff = _claim_cutoff(now)
-    result = db.execute(
+    claim_update = (
         update(Submission)
         .where(
             Submission.id == submission_id,
@@ -151,7 +151,9 @@ def claim_submission(
             claimed_at=now,
             row_version=current.row_version + 1,
         )
+        .execution_options(synchronize_session=False)
     )
+    result = db.execute(claim_update)
     if getattr(result, "rowcount", 0) != 1:
         db.rollback()
         raise HTTPException(
