@@ -59,3 +59,42 @@ jobs:
       - run: uv run pytest --cov=app --cov-report=term-missing --cov-fail-under=90
       - name: Verify entrypoint syntax
         run: sh -n entrypoint.sh
+
+  postgres-contract:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: airlock_test
+          POSTGRES_USER: airlock
+          POSTGRES_PASSWORD: airlock-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U airlock -d airlock_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      AIRLOCK_DATABASE_URL: postgresql+psycopg://airlock:airlock-test@127.0.0.1:5432/airlock_test
+      AIRLOCK_QUARANTINE_DIR: /tmp/airlock-postgres-quarantine
+      AIRLOCK_AUTO_CREATE_SCHEMA: "false"
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --all-extras
+      - name: Apply Alembic migration to PostgreSQL
+        run: uv run alembic upgrade head
+      - name: Run backend suite against PostgreSQL
+        run: uv run pytest -q
