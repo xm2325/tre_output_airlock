@@ -125,7 +125,10 @@ def _validate_expected_claim(
         return
     values = _normalise_claim_values(claims.get(claim_name))
     if expected not in values:
-        raise _http_error(status.HTTP_401_UNAUTHORIZED, f"Token {claim_name} claim is not accepted.")
+        raise _http_error(
+            status.HTTP_401_UNAUTHORIZED,
+            f"Token {claim_name} claim is not accepted.",
+        )
 
 
 def _actor_from_introspection_claims(
@@ -141,7 +144,10 @@ def _actor_from_introspection_claims(
             if float(expiry) <= time():
                 raise _http_error(status.HTTP_401_UNAUTHORIZED, "Bearer token has expired.")
         except (TypeError, ValueError) as exc:
-            raise _http_error(status.HTTP_401_UNAUTHORIZED, "Token expiry claim is invalid.") from exc
+            raise _http_error(
+                status.HTTP_401_UNAUTHORIZED,
+                "Token expiry claim is invalid.",
+            ) from exc
 
     _validate_expected_claim(claims, "aud", config.expected_audience)
     _validate_expected_claim(claims, "iss", config.expected_issuer)
@@ -155,7 +161,7 @@ def _actor_from_introspection_claims(
 
 def _introspect_token(token: str, config: OidcIntrospectionSettings) -> Actor:
     credentials = base64.b64encode(
-        f"{config.client_id}:{config.client_secret}".encode("utf-8")
+        f"{config.client_id}:{config.client_secret}".encode()
     ).decode("ascii")
     request = Request(
         config.introspection_url,
