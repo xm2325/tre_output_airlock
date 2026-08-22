@@ -39,7 +39,12 @@ app = FastAPI(
     lifespan=lifespan,
     openapi_tags=[
         {"name": "operations", "description": "Health, readiness, metrics and telemetry."},
-        {"name": "identity", "description": "Header-based demo identity and role context."},
+        {
+            "name": "identity",
+            "description": (
+                "Local demo identity or OAuth2/OIDC token-introspection identity and role context."
+            ),
+        },
         {
             "name": "policy",
             "description": "Versioned policy, rule catalogue and policy simulation.",

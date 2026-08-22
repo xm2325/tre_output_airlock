@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 
 def _as_bool(value: str) -> bool:
@@ -13,9 +14,41 @@ def _split_csv(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
 
 
+def build_database_url() -> str:
+    explicit_url = os.getenv("AIRLOCK_DATABASE_URL", "").strip()
+    if explicit_url:
+        return explicit_url
+
+    host = os.getenv("AIRLOCK_DATABASE_HOST", "").strip()
+    if not host:
+        return "sqlite:///./data/airlock.db"
+
+    user = os.getenv("AIRLOCK_DATABASE_USER", "").strip()
+    password = os.getenv("AIRLOCK_DATABASE_PASSWORD", "")
+    database = os.getenv("AIRLOCK_DATABASE_NAME", "airlock").strip()
+    port = os.getenv("AIRLOCK_DATABASE_PORT", "5432").strip()
+    if not user or not password or not database:
+        raise ValueError(
+            "RDS-style database configuration requires AIRLOCK_DATABASE_USER, "
+            "AIRLOCK_DATABASE_PASSWORD and AIRLOCK_DATABASE_NAME"
+        )
+    try:
+        parsed_port = int(port)
+    except ValueError as exc:
+        raise ValueError("AIRLOCK_DATABASE_PORT must be an integer") from exc
+    if parsed_port < 1 or parsed_port > 65535:
+        raise ValueError("AIRLOCK_DATABASE_PORT must be between 1 and 65535")
+
+    return (
+        "postgresql+psycopg://"
+        f"{quote(user, safe='')}:{quote(password, safe='')}@{host}:{parsed_port}/"
+        f"{quote(database, safe='')}"
+    )
+
+
 @dataclass(frozen=True)
 class Settings:
-    database_url: str = os.getenv("AIRLOCK_DATABASE_URL", "sqlite:///./data/airlock.db")
+    database_url: str = build_database_url()
     quarantine_dir: Path = Path(os.getenv("AIRLOCK_QUARANTINE_DIR", "./quarantine"))
     max_file_size_mb: int = int(os.getenv("AIRLOCK_MAX_FILE_SIZE_MB", "5"))
     retention_days: int = int(os.getenv("AIRLOCK_RETENTION_DAYS", "30"))
