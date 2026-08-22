@@ -1,0 +1,41 @@
+name: Refresh security locks once
+
+on:
+  push:
+    branches: [genomics-england-python-backend-v0.4]
+    paths:
+      - ".github/workflows/refresh-security-locks.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: genomics-england-python-backend-v0.4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Refresh Python lock
+        working-directory: backend
+        run: uv lock --upgrade-package pypdf --upgrade-package pip
+      - name: Refresh frontend lock
+        working-directory: frontend
+        run: npm audit fix --package-lock-only
+      - name: Commit generated lock files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/uv.lock frontend/package-lock.json
+          if git diff --cached --quiet; then
+            echo "No lock-file changes generated."
+            exit 0
+          fi
+          git commit -m "security: refresh dependency locks"
+          git push origin HEAD:genomics-england-python-backend-v0.4
