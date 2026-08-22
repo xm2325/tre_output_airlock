@@ -238,7 +238,10 @@ def review_submission(
     if actor.role != "admin" and _claim_is_expired(submission):
         raise HTTPException(
             status_code=409,
-            detail="The review claim has expired. Claim the item again before recording a decision.",
+            detail=(
+                "The review claim has expired. "
+                "Claim the item again before recording a decision."
+            ),
         )
     if actor.role != "admin" and submission.claimed_by != actor.name:
         raise HTTPException(
