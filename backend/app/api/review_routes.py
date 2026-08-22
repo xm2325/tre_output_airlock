@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 import math
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Literal
 from uuid import uuid4
@@ -60,6 +60,30 @@ from app.services.storage import FileTooLargeError, quarantined_path, store_quar
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+
+def _claim_cutoff(now: datetime | None = None) -> datetime:
+    ttl_minutes = settings.review_claim_ttl_minutes
+    if ttl_minutes <= 0:
+        raise RuntimeError("AIRLOCK_REVIEW_CLAIM_TTL_MINUTES must be greater than zero.")
+    reference = now or datetime.now(UTC)
+    return reference - timedelta(minutes=ttl_minutes)
+
+
+def _normalise_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _claim_is_expired(submission: Submission, now: datetime | None = None) -> bool:
+    if submission.claimed_by is None:
+        return False
+    if submission.claimed_at is None:
+        return True
+    reference = now or datetime.now(UTC)
+    return _normalise_utc(submission.claimed_at) <= _claim_cutoff(reference)
+
+
 @router.get(
     "/api/v1/review-queue",
     response_model=list[SubmissionSummary],
@@ -72,9 +96,17 @@ def review_queue(
 ) -> list[Submission]:
     statement = select(Submission).where(Submission.status == "AWAITING_REVIEW")
     if unclaimed_only:
-        statement = statement.where(Submission.claimed_by.is_(None))
+        cutoff = _claim_cutoff()
+        statement = statement.where(
+            or_(
+                Submission.claimed_by.is_(None),
+                Submission.claimed_at.is_(None),
+                Submission.claimed_at <= cutoff,
+            )
+        )
     statement = statement.order_by(desc(Submission.risk_score), asc(Submission.created_at))
     return list(db.scalars(statement))
+
 
 @router.post(
     "/api/v1/submissions/{submission_id}/claim",
@@ -90,24 +122,33 @@ def claim_submission(
     current = _get_submission(db, submission_id, actor)
     if current.status != "AWAITING_REVIEW":
         raise HTTPException(status_code=409, detail="Submission is not awaiting review.")
-    if current.claimed_by == actor.name:
+
+    now = datetime.now(UTC)
+    expired = _claim_is_expired(current, now)
+    previous_claimant = current.claimed_by
+    if current.claimed_by == actor.name and not expired:
         return current
-    if current.claimed_by is not None:
+    if current.claimed_by is not None and not expired:
         raise HTTPException(
             status_code=409, detail=f"Submission is already claimed by {current.claimed_by}."
         )
 
+    cutoff = _claim_cutoff(now)
     result = db.execute(
         update(Submission)
         .where(
             Submission.id == submission_id,
             Submission.status == "AWAITING_REVIEW",
-            Submission.claimed_by.is_(None),
             Submission.row_version == current.row_version,
+            or_(
+                Submission.claimed_by.is_(None),
+                Submission.claimed_at.is_(None),
+                Submission.claimed_at <= cutoff,
+            ),
         )
         .values(
             claimed_by=actor.name,
-            claimed_at=datetime.now(UTC),
+            claimed_at=now,
             row_version=current.row_version + 1,
         )
     )
@@ -116,17 +157,31 @@ def claim_submission(
         raise HTTPException(
             status_code=409, detail="The review item changed. Refresh and try again."
         )
-    db.commit()
-    submission = _get_submission(db, submission_id, actor)
+
+    # Keep the state transition and its audit record inside one transaction. If
+    # audit creation fails, closing the request-scoped session rolls back the
+    # uncommitted claim instead of leaving an unaudited state change behind.
+    db.flush()
+    db.refresh(current)
+    if expired and previous_claimant is not None:
+        event_type = "REVIEW_CLAIM_REASSIGNED"
+        detail = (
+            f"Expired claim held by {previous_claimant} was reassigned to {actor.name} "
+            f"at row_version={current.row_version}."
+        )
+    else:
+        event_type = "REVIEW_CLAIMED"
+        detail = f"Reviewer claimed item at row_version={current.row_version}."
     append_audit_event(
-        submission,
-        "REVIEW_CLAIMED",
+        current,
+        event_type,
         actor.name,
-        f"Reviewer claimed item at row_version={submission.row_version}.",
+        detail,
         _request_id(request),
     )
     db.commit()
     return _get_submission(db, submission_id, actor)
+
 
 @router.post(
     "/api/v1/submissions/{submission_id}/release-claim",
@@ -160,6 +215,7 @@ def release_claim(
     db.commit()
     return _get_submission(db, submission_id, actor)
 
+
 @router.post(
     "/api/v1/submissions/{submission_id}/review",
     response_model=SubmissionDetail,
@@ -178,6 +234,11 @@ def review_submission(
     if payload.expected_version != submission.row_version:
         raise HTTPException(
             status_code=409, detail="The review item changed. Refresh and try again."
+        )
+    if actor.role != "admin" and _claim_is_expired(submission):
+        raise HTTPException(
+            status_code=409,
+            detail="The review claim has expired. Claim the item again before recording a decision.",
         )
     if actor.role != "admin" and submission.claimed_by != actor.name:
         raise HTTPException(
@@ -203,4 +264,3 @@ def review_submission(
         "Manual review completed", extra={"submission_id": submission.id, "status_code": 200}
     )
     return _get_submission(db, submission.id, actor)
-
