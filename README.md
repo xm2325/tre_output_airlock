@@ -1,14 +1,15 @@
 # Clinical–Genomic Data Platform and TRE Output Airlock
 
 [![CI](https://github.com/xm2325/tre_output_airlock/actions/workflows/ci.yml/badge.svg)](https://github.com/xm2325/tre_output_airlock/actions/workflows/ci.yml)
+[![AWS backend service](https://github.com/xm2325/tre_output_airlock/actions/workflows/backend-service.yml/badge.svg)](https://github.com/xm2325/tre_output_airlock/actions/workflows/backend-service.yml)
 [![Clinical genomic pipeline](https://github.com/xm2325/tre_output_airlock/actions/workflows/clinical-genomic-pipeline.yml/badge.svg)](https://github.com/xm2325/tre_output_airlock/actions/workflows/clinical-genomic-pipeline.yml)
 [![Pages demo](https://github.com/xm2325/tre_output_airlock/actions/workflows/pages.yml/badge.svg)](https://github.com/xm2325/tre_output_airlock/actions/workflows/pages.yml)
 
-[Open the browser-only Airlock demo](https://xm2325.github.io/tre_output_airlock/) · [Review the clinical–genomic pipeline](clinical_genomic_pipeline/README.md) · [Read production limits](docs/production-readiness.md)
+[Open the browser-only Airlock demo](https://xm2325.github.io/tre_output_airlock/) · [Review the clinical–genomic pipeline](clinical_genomic_pipeline/README.md) · [Read the identity/backend design](docs/identity-and-backend-platform.md) · [Read production limits](docs/production-readiness.md)
 
 A production-minded portfolio project showing the controlled data path around a trusted research environment (TRE): secure synthetic clinical and genomic acquisition, validation, standardisation, research-ready data publication, and disclosure review before outputs leave the TRE.
 
-> **Safety boundary:** all clinical and genomic records are synthetic. This repository is not affiliated with UK Biobank or Genomics England, does not implement their policies, and must not be used with real participant data.
+> **Safety boundary:** all clinical and genomic records are synthetic. This repository is not affiliated with UK Biobank or Genomics England, does not implement their policies, and must not be used with real participant data. AWS service infrastructure in this repository is a CI-validated reference design, not a claimed live production deployment.
 
 ## Problems addressed
 
@@ -46,21 +47,23 @@ flowchart LR
   S --> T
 ```
 
-## Data Engineer evidence
+## Engineering evidence
 
-| Job capability | Repository evidence |
+| Capability | Repository evidence |
 |---|---|
+| Backend Python / REST | FastAPI service, typed request/response schemas, OpenAPI export, PostgreSQL/SQLAlchemy and Alembic migrations |
+| Identity and authorisation | Local demo identity plus OAuth2/OIDC token-introspection mode, issuer/audience/expiry checks, configurable IdP group-to-RBAC mapping and explicit 401/403/503 paths |
+| Concurrency and workflow safety | Review claims, optimistic concurrency, idempotent submission handling and auditable state transitions |
+| PostgreSQL / RDS | PostgreSQL-backed local stack plus tested RDS-style host/port/user/password configuration and explicit one-off migration contract for multi-task service deployment |
+| AWS backend service | Terraform for API Gateway, private ALB, ECS Fargate, RDS PostgreSQL, encrypted EFS, Secrets Manager, CloudWatch and constrained IAM roles; format/init/validate run in GitHub Actions |
 | ETL/ELT pipelines | FHIR, genomic manifest and VCF ingestion with stable run IDs and atomic publication |
 | Clinical and genomic data | Patient, condition, observation, specimen and genomic sample linkage |
 | Secure transfer | Aspera/Globus-style receipt with endpoints, bytes, retries, resume state and receiver-side SHA-256 |
 | FHIR, OMOP and terminology | FHIR R4 subset, OMOP-aligned tables, SNOMED and LOINC concept mapping |
 | Data quality | Schema drift, foreign keys, required fields, terminology coverage and quarantine issue codes |
 | Metadata and lineage | Source hashes, schema fingerprint, transfer ID, code revision, model status and run metrics |
-| Prefect | Preflight, processing and evidence tasks with separate retry policies |
-| AWS | Terraform S3/KMS/SQS baseline and tested SSE-KMS curated publication plan |
-| Security and governance | HMAC pseudonyms, date shifts, restricted linkage zone and explicit cloud deny boundary |
-| CI/CD | Ruff, strict MyPy, unit tests, privacy scans, Prefect smoke test and evidence artifacts |
-| Product and QA integration | JSON reports, stable issue codes, operations summary and portable HTML dashboard |
+| AWS data controls | Terraform S3/KMS/SQS baseline and tested SSE-KMS curated publication plan |
+| CI/CD and QA | Ruff, strict MyPy, pytest/coverage, dependency audits, migration checks, frontend tests/build, Docker full-stack integration and container builds |
 
 ## Clinical–genomic ingestion capabilities
 
@@ -93,6 +96,7 @@ The Airlock includes:
 
 - researcher, reviewer and admin scopes;
 - owner filtering, review claims and optimistic concurrency control;
+- OAuth2/OIDC token-introspection identity mode with configurable IdP group-to-role mapping;
 - direct-identifier, quasi-identifier, small-cell, uniqueness and free-text checks;
 - versioned release policy and policy workload simulation;
 - HMAC-signed reports and SHA-256-linked audit events;
@@ -101,6 +105,22 @@ The Airlock includes:
 - Prometheus-style metrics and readiness checks;
 - a nine-case synthetic benchmark;
 - Docker Compose integration and container builds.
+
+## AWS backend-service reference
+
+The backend service has a separate Terraform reference path:
+
+```text
+API Gateway HTTP API
+    -> VPC Link
+    -> internal ALB
+    -> private ECS Fargate tasks
+         -> private RDS PostgreSQL
+         -> encrypted EFS working-file volume
+         -> OAuth2/OIDC token introspection over HTTPS
+```
+
+Runtime database credentials, the IdP client secret and report-signing material are injected through Secrets Manager. The service task has no public IP. The application task role intentionally has no AWS control-plane permissions because the current FastAPI process does not call AWS APIs directly. See [`infra/aws/backend_service/README.md`](infra/aws/backend_service/README.md) and [`docs/identity-and-backend-platform.md`](docs/identity-and-backend-platform.md).
 
 ## Browser-only Airlock demo
 
@@ -163,7 +183,7 @@ Open:
 - readiness: `http://localhost:8000/ready`
 - telemetry: `http://localhost:8000/metrics`
 
-Docker Compose uses PostgreSQL. The API container runs `alembic upgrade head` before startup.
+Docker Compose uses PostgreSQL. The API container runs `alembic upgrade head` before startup by default. Multi-task service deployment can set `AIRLOCK_RUN_MIGRATIONS=false` and run one explicit migration task before updating the service.
 
 ## Validation evidence
 
@@ -179,16 +199,18 @@ The clinical–genomic workflow checks:
 - AWS curated plan with restricted-data exclusion;
 - Terraform format, initialisation and validation.
 
-The Airlock CI checks:
+The current Airlock backend contract checks:
 
-- 31 backend tests and a 90% coverage gate;
-- frontend unit and API contract tests;
-- dependency audits;
-- database migration and OpenAPI snapshot;
-- policy benchmark;
-- Docker Compose configuration;
-- full-stack startup and route checks;
+- **43 backend tests** with **91.31% coverage** against a 90% gate;
+- Ruff and strict MyPy;
+- Python dependency audit;
+- database migration and OpenAPI export;
+- nine-case synthetic policy benchmark;
+- frontend dependency audit, typecheck, unit tests and build;
+- Docker Compose configuration and full-stack route verification;
 - final container build.
+
+The dedicated AWS backend-service workflow separately checks Terraform format, `init -backend=false` and `validate`, alongside the backend test contract. These checks validate code and configuration; they do not demonstrate a live AWS deployment.
 
 ## Repository structure
 
@@ -200,6 +222,8 @@ benchmark/                              Synthetic Airlock benchmark
 samples/                                Synthetic release-review files
 infra/aws/                              Airlock AWS quarantine baseline
 infra/aws/clinical_genomic/             Clinical-genomic S3, KMS, SQS and IAM baseline
+infra/aws/backend_service/              API Gateway, ECS, RDS, EFS, IAM and Secrets Manager reference
+docs/identity-and-backend-platform.md   OIDC/IdP, RDS and backend-service design
 docs/clinical-genomic-platform.md       Upstream data-platform design
 docs/production-readiness.md            Demonstrated controls and remaining work
 docs/adr/                               Architecture decision records
@@ -207,7 +231,7 @@ docs/adr/                               Architecture decision records
 
 ## Production boundary
 
-Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing the project as production-ready. Remaining work includes managed transfer APIs and credentials, malware scanning, approved FHIR profiles, governed vocabulary releases, full OMOP validation, workload identity, private networking, managed Prefect workers, central telemetry and paging, retention enforcement, representative source-system testing and formal privacy review.
+Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing the project as production-ready. The new AWS backend path is a statically validated reference deployment and the OIDC tests mock the identity-provider network boundary. A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, malware scanning, formal privacy/security review and representative source-system validation.
 
 ## Author
 
