@@ -17,6 +17,7 @@ from fastapi import (
     HTTPException,
     Query,
     Request,
+    Response,
     UploadFile,
     status,
 )
@@ -33,6 +34,7 @@ from app.api.common import (
 )
 from app.core.auth import Actor, get_actor, require_roles
 from app.core.config import settings
+from app.core.http_preconditions import submission_etag
 from app.core.policy import API_VERSION, POLICY_VERSION, RULE_CATALOG
 from app.core.telemetry import telemetry
 from app.db import get_db
@@ -251,11 +253,14 @@ def list_submissions(
     tags=["submissions"],
 )
 def get_submission(
+    response: Response,
     submission_id: str,
     actor: Actor = Depends(get_actor),
     db: Session = Depends(get_db),
 ) -> Submission:
-    return _get_submission(db, submission_id, actor)
+    submission = _get_submission(db, submission_id, actor)
+    response.headers["ETag"] = submission_etag(submission.id, submission.row_version)
+    return submission
 
 @router.post(
     "/api/v1/submissions/{submission_id}/recheck",
