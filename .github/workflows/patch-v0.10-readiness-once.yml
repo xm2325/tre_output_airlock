@@ -1,0 +1,48 @@
+name: Patch v0.10 readiness once
+
+on:
+  push:
+    branches: [database-pool-observability-v0.10]
+    paths:
+      - ".github/workflows/patch-v0.10-readiness-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: database-pool-observability-v0.10
+      - name: Record readiness pool timeouts explicitly
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/app/api/operations_routes.py")
+          text = path.read_text()
+          old_import = "from sqlalchemy import and_, asc, desc, func, or_, select, text, update\n"
+          new_import = old_import + "from sqlalchemy.exc import TimeoutError as SqlAlchemyTimeoutError\n"
+          if old_import not in text:
+              raise SystemExit("SQLAlchemy import anchor not found")
+          text = text.replace(old_import, new_import, 1)
+
+          old_except = '''    except Exception as exc:\n        logger.exception("Readiness check failed")\n        raise HTTPException(status_code=503, detail="Service dependencies are not ready.") from exc\n'''
+          new_except = '''    except SqlAlchemyTimeoutError as exc:\n        telemetry.record_database_pool_checkout_timeout()\n        logger.warning("Readiness check failed because the database pool is exhausted")\n        raise HTTPException(status_code=503, detail="Service dependencies are not ready.") from exc\n    except Exception as exc:\n        logger.exception("Readiness check failed")\n        raise HTTPException(status_code=503, detail="Service dependencies are not ready.") from exc\n'''
+          if old_except not in text:
+              raise SystemExit("Readiness exception anchor not found")
+          text = text.replace(old_except, new_except, 1)
+          path.write_text(text)
+          PY
+          git diff --check
+          git diff -- backend/app/api/operations_routes.py
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/api/operations_routes.py
+          git diff --cached --quiet && exit 0
+          git commit -m "feat: count readiness database pool timeouts"
+          git push origin HEAD:database-pool-observability-v0.10
