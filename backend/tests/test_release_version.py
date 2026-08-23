@@ -18,7 +18,7 @@ def test_runtime_version_matches_repository_release(client: TestClient) -> None:
 
     assert expected == "0.7.0"
     assert __version__ == expected
-    assert API_VERSION == expected
+    assert expected == API_VERSION
     assert app.version == expected
 
     response = client.get("/health")
