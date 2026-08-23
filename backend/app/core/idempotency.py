@@ -7,7 +7,7 @@ IDEMPOTENCY_FINGERPRINT_VERSION = "submission-create-v1"
 
 
 def idempotency_scope_key(actor_name: str, raw_key: str) -> str:
-    material = f"{actor_name}\0{raw_key}".encode("utf-8")
+    material = f"{actor_name}\0{raw_key}".encode()
     return hashlib.sha256(material).hexdigest()
 
 
