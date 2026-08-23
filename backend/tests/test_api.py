@@ -3,6 +3,7 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.core.policy import API_VERSION
 from app.db import SessionLocal
 from app.models import AuditEvent
 
@@ -63,7 +64,7 @@ def claim(client: TestClient, submission_id: str, headers: dict[str, str] | None
 def test_health_readiness_identity_and_security_headers(client: TestClient) -> None:
     response = client.get("/health")
     assert response.status_code == 200
-    assert response.json()["version"] == "0.3.1"
+    assert response.json()["version"] == API_VERSION
     assert response.json()["policy_version"] == "demo-policy-2026.2"
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["x-frame-options"] == "DENY"
