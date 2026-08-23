@@ -26,10 +26,7 @@ def _collect_indexes(node: dict[str, Any]) -> set[str]:
 
 def _plan(connection: Any, sql: str, params: dict[str, Any]) -> dict[str, Any]:
     raw = connection.execute(text(f"EXPLAIN (FORMAT JSON) {sql}"), params).scalar_one()
-    if isinstance(raw, str):
-        decoded = json.loads(raw)
-    else:
-        decoded = raw
+    decoded = json.loads(raw) if isinstance(raw, str) else raw
     if not isinstance(decoded, list) or not decoded or not isinstance(decoded[0], dict):
         raise RuntimeError("PostgreSQL returned an unexpected EXPLAIN JSON shape.")
     plan = decoded[0]
