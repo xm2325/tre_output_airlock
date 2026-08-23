@@ -275,6 +275,9 @@ resource "aws_ecs_task_definition" "airlock" {
         { name = "AIRLOCK_DATABASE_POOL_RECYCLE_SECONDS", value = tostring(var.database_pool_recycle_seconds) },
         { name = "AIRLOCK_AUTO_CREATE_SCHEMA", value = "false" },
         { name = "AIRLOCK_RUN_MIGRATIONS", value = "false" },
+        { name = "AIRLOCK_SCAN_MODE", value = "queued" },
+        { name = "AIRLOCK_SCAN_QUEUE_URL", value = aws_sqs_queue.scan.url },
+        { name = "AIRLOCK_AWS_REGION", value = var.aws_region },
         { name = "AIRLOCK_QUARANTINE_DIR", value = "/mnt/airlock/quarantine" },
         { name = "AIRLOCK_CORS_ORIGINS", value = var.cors_origins },
       ]
