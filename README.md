@@ -179,16 +179,21 @@ The clinical–genomic workflow checks:
 - AWS curated plan with restricted-data exclusion;
 - Terraform format, initialisation and validation.
 
-The Airlock CI checks:
+The current Airlock backend validation at code commit `49e7d7025e76ddb9ab8bb25dbeeced1458921ff7` checks:
 
-- 31 backend tests and a 90% coverage gate;
-- frontend unit and API contract tests;
+- 43 backend tests and a 90% coverage gate, with 91.31% observed coverage;
+- Ruff and strict MyPy, with no MyPy issues in 25 source files;
+- seven OIDC authentication tests whose external IdP network boundary is mocked;
+- frontend unit and API contract tests in the general CI workflow;
 - dependency audits;
 - database migration and OpenAPI snapshot;
 - policy benchmark;
 - Docker Compose configuration;
 - full-stack startup and route checks;
-- final container build.
+- final container build;
+- statically validated AWS backend-service Terraform (`fmt`, `init -backend=false`, `validate`).
+
+Terraform validation is reference infrastructure evidence, not proof of a live AWS deployment. The OIDC tests do not prove integration with a real Okta tenant.
 
 ## Repository structure
 
