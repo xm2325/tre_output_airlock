@@ -22,7 +22,7 @@ FINGERPRINT_VERSION = "submission-create-v1"
 
 
 def _scope_key(actor_name: str, raw_key: str) -> str:
-    return hashlib.sha256(f"{actor_name}\0{raw_key}".encode("utf-8")).hexdigest()
+    return hashlib.sha256(f"{actor_name}\0{raw_key}".encode()).hexdigest()
 
 
 def _fingerprint(row: sa.RowMapping) -> str:
