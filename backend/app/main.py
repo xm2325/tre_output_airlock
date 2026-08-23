@@ -8,6 +8,7 @@ from uuid import uuid4
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import TimeoutError as SqlAlchemyTimeoutError
 
 from app.api.routes import router
 from app.core.config import settings
@@ -64,6 +65,31 @@ app.add_middleware(
     allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(SqlAlchemyTimeoutError)
+async def database_pool_timeout_handler(
+    request: Request, _: SqlAlchemyTimeoutError
+) -> JSONResponse:
+    telemetry.record_database_pool_checkout_timeout()
+    request_id = getattr(request.state, "request_id", str(uuid4()))
+    logger.warning(
+        "Database connection pool checkout timed out",
+        extra={
+            "request_id": request_id,
+            "path": request.url.path,
+            "method": request.method,
+            "status_code": 503,
+        },
+    )
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": "Database connection capacity is temporarily unavailable.",
+            "request_id": request_id,
+        },
+        headers={"X-Request-ID": request_id},
+    )
 
 
 @app.middleware("http")
