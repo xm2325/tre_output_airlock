@@ -101,4 +101,5 @@ def enqueue_scan(
     db.add(job)
     db.flush()
     db.add(outbox)
+    db.flush()
     return job, outbox
