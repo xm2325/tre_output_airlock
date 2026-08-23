@@ -5,7 +5,8 @@ Role: Software Engineer - Python
 Office locations: Cambridge, Leeds and London  
 Salary from: £71,400  
 Closing date: 6 September 2026, 23:00 UK time  
-Source checked: Genomics England careers page, 23 August 2026
+Source checked: Genomics England careers page, 24 August 2026
+Current status: `Apply now` displayed on the official careers page.
 
 ## P0 — core evidence targets
 
@@ -32,7 +33,7 @@ Source checked: Genomics England careers page, 23 August 2026
 This repository is a portfolio evidence project, not a Genomics England system. Repository claims must distinguish direct implementation from reference infrastructure and from live operation.
 
 - Statically validated Terraform is not a live AWS deployment.
-- Mocked OIDC/IdP tests are not a real Okta tenant integration.
+- Mocked OIDC/IdP tests are not a real Okta integration.
 - Synthetic clinical and genomic records are not real participant data.
 - A CV claim is allowed only when the repository or another verified source directly supports it.
 
