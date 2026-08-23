@@ -59,7 +59,9 @@ def queue_settings() -> AsyncScanSettings:
     )
 
 
-def create_queued_submission(content: bytes = b"metric,count\nalpha,20\nbeta,25\n") -> tuple[str, str]:
+def create_queued_submission(
+    content: bytes = b"metric,count\nalpha,20\nbeta,25\n",
+) -> tuple[str, str]:
     submission_id = str(uuid4())
     filename = "safe.csv"
     path = quarantined_path(submission_id, filename)
