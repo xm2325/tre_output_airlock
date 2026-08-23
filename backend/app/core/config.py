@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +13,28 @@ def _as_bool(value: str) -> bool:
 
 def _split_csv(value: str) -> tuple[str, ...]:
     return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _int_setting(name: str, default: str, *, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name, default).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
+def _float_setting(name: str, default: str, *, minimum: float, maximum: float) -> float:
+    raw = os.getenv(name, default).strip()
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be numeric") from exc
+    if not math.isfinite(value) or value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum:g} and {maximum:g}")
+    return value
 
 
 def build_database_url() -> str:
@@ -44,6 +67,64 @@ def build_database_url() -> str:
         f"{quote(user, safe='')}:{quote(password, safe='')}@{host}:{parsed_port}/"
         f"{quote(database, safe='')}"
     )
+
+
+@dataclass(frozen=True)
+class DatabasePoolSettings:
+    size: int
+    max_overflow: int
+    timeout_seconds: float
+    recycle_seconds: int
+
+
+def load_database_pool_settings() -> DatabasePoolSettings:
+    return DatabasePoolSettings(
+        size=_int_setting(
+            "AIRLOCK_DATABASE_POOL_SIZE",
+            "5",
+            minimum=1,
+            maximum=20,
+        ),
+        max_overflow=_int_setting(
+            "AIRLOCK_DATABASE_MAX_OVERFLOW",
+            "5",
+            minimum=0,
+            maximum=20,
+        ),
+        timeout_seconds=_float_setting(
+            "AIRLOCK_DATABASE_POOL_TIMEOUT_SECONDS",
+            "5.0",
+            minimum=0.1,
+            maximum=30.0,
+        ),
+        recycle_seconds=_int_setting(
+            "AIRLOCK_DATABASE_POOL_RECYCLE_SECONDS",
+            "900",
+            minimum=30,
+            maximum=3600,
+        ),
+    )
+
+
+def build_database_engine_options(database_url: str) -> dict[str, object]:
+    options: dict[str, object] = {
+        "future": True,
+        "pool_pre_ping": True,
+    }
+    if database_url.startswith("sqlite"):
+        options["connect_args"] = {"check_same_thread": False}
+        return options
+
+    pool = load_database_pool_settings()
+    options.update(
+        {
+            "pool_size": pool.size,
+            "max_overflow": pool.max_overflow,
+            "pool_timeout": pool.timeout_seconds,
+            "pool_recycle": pool.recycle_seconds,
+        }
+    )
+    return options
 
 
 @dataclass(frozen=True)
