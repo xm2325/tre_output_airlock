@@ -9,12 +9,32 @@ output "ecs_cluster_name" {
 }
 
 output "ecs_service_name" {
-  description = "ECS service name used for deployments and monitoring."
+  description = "ECS API service name used for deployments and monitoring."
   value       = aws_ecs_service.airlock.name
 }
 
+output "outbox_publisher_service_name" {
+  description = "ECS service that publishes committed outbox events to SQS."
+  value       = aws_ecs_service.outbox_publisher.name
+}
+
+output "scan_worker_service_name" {
+  description = "ECS service that consumes and processes asynchronous scan messages."
+  value       = aws_ecs_service.scan_worker.name
+}
+
+output "scan_queue_arn" {
+  description = "Encrypted SQS queue carrying at-least-once scan messages."
+  value       = aws_sqs_queue.scan.arn
+}
+
+output "scan_dead_letter_queue_arn" {
+  description = "SQS dead-letter queue for exhausted scan deliveries."
+  value       = aws_sqs_queue.scan_dlq.arn
+}
+
 output "task_definition_arn" {
-  description = "Task definition that can also be used for a one-off Alembic migration command override."
+  description = "API task definition that can also be used for a one-off Alembic migration command override."
   value       = aws_ecs_task_definition.airlock.arn
 }
 
@@ -31,11 +51,21 @@ output "database_master_secret_arn" {
 }
 
 output "task_execution_role_arn" {
-  description = "ECS execution role restricted to declared runtime secrets plus standard image/log access."
+  description = "API ECS execution role restricted to declared runtime secrets plus standard image/log access."
   value       = aws_iam_role.task_execution.arn
 }
 
 output "task_role_arn" {
-  description = "Application task role. It intentionally has no AWS API permissions in this reference design."
+  description = "API application task role. It intentionally has no SQS permissions."
   value       = aws_iam_role.task.arn
+}
+
+output "outbox_publisher_task_role_arn" {
+  description = "Publisher runtime role restricted to SQS SendMessage on the scan queue."
+  value       = aws_iam_role.outbox_publisher.arn
+}
+
+output "scan_worker_task_role_arn" {
+  description = "Worker runtime role restricted to consuming and acknowledging scan messages."
+  value       = aws_iam_role.scan_worker.arn
 }
