@@ -1,0 +1,113 @@
+name: Prepare v0.11 release once
+
+on:
+  push:
+    branches: [cursor-pagination-v0.11]
+    paths:
+      - ".github/workflows/prepare-v0.11-release-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor-pagination-v0.11
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Promote source metadata to 0.11.0
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if old not in text:
+                  raise SystemExit(f"Expected anchor missing in {path}: {old!r}")
+              file.write_text(text.replace(old, new, 1))
+
+          version = Path("VERSION")
+          if version.read_text().strip() != "0.10.0":
+              raise SystemExit("VERSION is not the expected 0.10.0 baseline")
+          version.write_text("0.11.0\n")
+          replace_once("backend/app/version.py", '__version__ = "0.10.0"', '__version__ = "0.11.0"')
+          replace_once("backend/pyproject.toml", 'version = "0.10.0"', 'version = "0.11.0"')
+          replace_once("frontend/package.json", '"version": "0.10.0"', '"version": "0.11.0"')
+          PY
+      - name: Refresh generated lock metadata
+        run: |
+          cd backend && uv lock
+          cd ../frontend && npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Update v0.11 engineering evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if old not in text:
+                  raise SystemExit(f"Expected anchor missing in {path}: {old[:140]!r}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "README.md",
+              "| Backend Python / REST | FastAPI service, typed request/response schemas, OpenAPI export, PostgreSQL/SQLAlchemy and Alembic migrations |",
+              "| Backend Python / REST | FastAPI service, typed schemas, OpenAPI export, bounded signed keyset cursor pagination with deterministic tie-breakers, PostgreSQL/SQLAlchemy and Alembic migrations |",
+          )
+          replace_once(
+              "README.md",
+              "- optimistic concurrency based on `row_version`;",
+              "- optimistic concurrency based on `row_version`;\n- signed actor/filter/sort-bound keyset cursor pagination for submission listing, while retaining the existing bounded page/offset API for browser compatibility;",
+          )
+          replace_once(
+              "README.md",
+              "- **71 backend tests collected**: **70 passed + 1 PostgreSQL-only skipped** on the standard SQLite backend job with **91.07% coverage** against a 90% gate;",
+              "- **78 backend tests collected**: **77 passed + 1 PostgreSQL-only skipped** on the standard SQLite backend job with **91.22% coverage** against a 90% gate;",
+          )
+          replace_once(
+              "README.md",
+              "- transactional review-claim rollback and expired-lease recovery;",
+              "- transactional review-claim rollback and expired-lease recovery;\n- signed cursor regression paths covering three stable sort orders, equal-key tie-breaks, no duplicate/gap traversal, actor/filter binding, tamper rejection and bounded page size;",
+          )
+          old_pg = "The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies the real Alembic migration and collects the same **71 tests**, with **70 passed + 1 SQLite-only skipped**. Its pool contract uses 3 persistent + 2 overflow connections, occupies all five, verifies live metrics report utilisation `1.0` and zero remaining capacity, checks `/ready` and a database-backed API return **503** under exhaustion, verifies the checkout-timeout counter increments, releases the held connections, then confirms utilisation returns to `0.0`, readiness recovers and `SELECT 1` succeeds. It also checks Terraform format, `init -backend=false` and `validate`. These checks validate code and configuration; they do not demonstrate a live AWS or real IdP deployment."
+          new_pg = "The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies Alembic through **`0002(head)`**, verifies both cursor-pagination composite indexes in `pg_indexes`, and collects the same **78 tests**, with **77 passed + 1 SQLite-only skipped**. Its pool contract still uses 3 persistent + 2 overflow connections, occupies all five, verifies live metrics report utilisation `1.0` and zero remaining capacity, checks `/ready` and a database-backed API return **503** under exhaustion, verifies the checkout-timeout counter increments, releases the held connections, then confirms utilisation returns to `0.0`, readiness recovers and `SELECT 1` succeeds. It also checks Terraform format, `init -backend=false` and `validate`. These checks validate code and configuration; they do not demonstrate a live AWS or real IdP deployment."
+          replace_once("README.md", old_pg, new_pg)
+          replace_once(
+              "README.md",
+              "Single-flight coordination is per API process, so separate ECS tasks can each perform one introspection for the same cold token. A real service would still require",
+              "Single-flight coordination is per API process, so separate ECS tasks can each perform one introspection for the same cold token. Keyset cursors are stateless and avoid deep `OFFSET` scans, but they do not provide snapshot isolation: concurrent submissions or rechecks that change a mutable sort key such as `risk_score` can move records between traversal steps. A real service would still require",
+          )
+
+          replace_once(
+              "docs/production-readiness.md",
+              "| Database | PostgreSQL Compose service, Alembic migration, optimistic concurrency, RDS-style configuration, bounded per-task SQLAlchemy pool settings, `pool_pre_ping`, checkout timeout/recycle controls, PostgreSQL 16 exhaustion/recovery testing and CI-validated RDS reference infrastructure | applied managed RDS environment, backup/restore tests, least-privilege database roles, capacity calibration against the actual RDS connection limit and ECS task count, and failover testing |",
+              "| Database | PostgreSQL Compose service, Alembic migrations, optimistic concurrency, bounded signed keyset submission pagination, composite cursor indexes, RDS-style configuration, bounded per-task SQLAlchemy pool settings, `pool_pre_ping`, checkout timeout/recycle controls, PostgreSQL 16 exhaustion/recovery testing and CI-validated RDS reference infrastructure | applied managed RDS environment, representative-cardinality pagination/load testing, backup/restore tests, least-privilege database roles, capacity calibration against the actual RDS connection limit and ECS task count, and failover testing |",
+          )
+          marker = "## Release gates\n"
+          pagination = """## Submission pagination boundary\n\nThe API keeps the existing bounded page/offset submission endpoint for browser compatibility and adds a separate signed keyset endpoint for deeper traversal. The keyset cursor is HMAC-protected and bound to the authenticated actor, active filters and sort order, so a tampered cursor or one reused under a different query contract is rejected. Stable unique-ID tie-breakers are used for `newest`, `oldest` and `risk_desc`, and the endpoint fetches only `limit + 1` rows rather than running a total-count query.\n\nAlembic revision `0002` adds `(created_at, id)` and `(risk_score DESC, created_at ASC, id ASC)` indexes. PostgreSQL 16 CI applies the real migration and verifies both indexes through `pg_indexes` before running the backend suite. This demonstrates the query/index contract, not production-scale latency. Representative-cardinality load tests and query-plan evidence are still required before making performance claims.\n\nKeyset pagination is not snapshot isolation. Concurrent inserts, deletes or rechecks can change the result set while a client traverses it; in particular, a recheck that changes `risk_score` can move a submission across a `risk_desc` cursor boundary. A production consumer that requires a frozen export must use an explicit snapshot/versioning design rather than treating this cursor as a snapshot token.\n\n"""
+          production = Path("docs/production-readiness.md")
+          text = production.read_text()
+          if marker not in text:
+              raise SystemExit("Release gates marker missing")
+          production.write_text(text.replace(marker, pagination + marker, 1))
+          PY
+          git diff --check
+      - name: Verify release version contract before commit
+        run: python scripts/check_release_version.py
+      - name: Commit generated release evidence
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION backend/app/version.py backend/pyproject.toml backend/uv.lock frontend/package.json frontend/package-lock.json README.md docs/production-readiness.md
+          git diff --cached --quiet && exit 0
+          git commit -m "release: prepare v0.11 keyset pagination evidence"
+          git push origin HEAD:cursor-pagination-v0.11
