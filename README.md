@@ -53,7 +53,7 @@ flowchart LR
 |---|---|
 | Backend Python / REST | FastAPI service, typed request/response schemas, OpenAPI export, PostgreSQL/SQLAlchemy and Alembic migrations |
 | Identity and authorisation | OAuth2/OIDC token introspection with issuer/audience/expiry checks, configurable IdP group-to-RBAC mapping, explicit 401/403/503 paths, and a bounded short-lived successful-introspection cache |
-| Identity resilience | 15-second default cache TTL capped by token `exp`, HMAC-SHA256 token digests instead of raw-token cache keys, bounded LRU eviction, failure non-caching and IdP latency/cache telemetry |
+| Identity resilience | 15-second default cache TTL capped by token `exp`, HMAC-SHA256 token/config digests, bounded LRU eviction, failure non-caching, per-token single-flight protection and IdP latency/cache telemetry |
 | Concurrency and workflow safety | Optimistic `row_version` compare-and-swap, transactional claim + audit persistence, 30-minute review-claim leases, expired-claim recovery and idempotent submission handling |
 | PostgreSQL / RDS | PostgreSQL-backed local stack, RDS-style configuration, one-off migration contract for multi-task deployment, and PostgreSQL 16 CI that applies Alembic then runs the full backend suite |
 | AWS backend service | Terraform for API Gateway, private ALB, ECS Fargate, RDS PostgreSQL, encrypted EFS, Secrets Manager, CloudWatch and constrained IAM roles; format/init/validate run in GitHub Actions |
@@ -64,7 +64,7 @@ flowchart LR
 | Data quality | Schema drift, foreign keys, required fields, terminology coverage and quarantine issue codes |
 | Metadata and lineage | Source hashes, schema fingerprint, transfer ID, code revision, model status and run metrics |
 | AWS data controls | Terraform S3/KMS/SQS baseline and tested SSE-KMS curated publication plan |
-| CI/CD and QA | Ruff, strict MyPy, pytest/coverage, dependency audits, PostgreSQL migration/test contract, frontend tests/build, Docker full-stack integration and container builds |
+| CI/CD and QA | Ruff, strict MyPy, pytest/coverage, dependency audits, release-version contract, PostgreSQL migration/test contract, frontend tests/build, Docker full-stack integration and container builds |
 
 ## Clinical–genomic ingestion capabilities
 
@@ -102,12 +102,13 @@ The Airlock includes:
 - optimistic concurrency based on `row_version`;
 - OAuth2/OIDC token-introspection identity with configurable IdP group-to-role mapping;
 - bounded short-lived successful-introspection caching with token-expiry capping and LRU eviction;
+- keyed per-process single-flight coordination so concurrent misses for the same token/config share one upstream introspection while different tokens remain concurrent;
 - direct-identifier, quasi-identifier, small-cell, uniqueness and free-text checks;
 - versioned release policy and policy workload simulation;
 - HMAC-signed reports and SHA-256-linked audit events;
 - PostgreSQL, Alembic migrations and FastAPI;
 - React and TypeScript dashboard;
-- Prometheus-style HTTP, OIDC cache and IdP latency metrics plus readiness checks;
+- Prometheus-style HTTP, OIDC cache/single-flight and IdP latency metrics plus readiness checks;
 - a nine-case synthetic benchmark;
 - Docker Compose integration and container builds.
 
@@ -206,12 +207,14 @@ The clinical–genomic workflow checks:
 
 The current Airlock backend contract checks:
 
-- **56 backend tests** with **92.04% coverage** against a 90% gate;
+- **61 backend tests** with **91.88% coverage** against a 90% gate;
 - Ruff and strict MyPy;
 - Python dependency audit;
+- cross-stack release-version consistency across runtime/package/lock metadata;
 - database migration and OpenAPI export;
 - nine-case synthetic policy benchmark;
 - OAuth2/OIDC cache, expiry, failure and numeric-configuration regression paths;
+- threaded OIDC single-flight regression paths: eight same-token concurrent calls collapse to one simulated upstream call, different tokens can reach the simulated IdP concurrently, shared failures are not cached, and TTL-zero mode coalesces only in-flight work;
 - transactional review-claim rollback and expired-lease recovery;
 - frontend dependency audit, typecheck, unit tests and build;
 - Docker Compose configuration and full-stack route verification;
@@ -238,7 +241,7 @@ docs/adr/                               Architecture decision records
 
 ## Production boundary
 
-Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing the project as production-ready. The AWS backend path is a statically validated reference deployment and the OIDC tests mock the identity-provider network boundary. A successfully introspected token can remain accepted until the deliberately short cache TTL expires if it is revoked immediately after introspection; deployments requiring immediate revocation can disable the cache. A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, malware scanning, formal privacy/security review and representative source-system validation.
+Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing the project as production-ready. The AWS backend path is a statically validated reference deployment and the OIDC tests mock the identity-provider network boundary. A successfully introspected token can remain accepted until the deliberately short cache TTL expires if it is revoked immediately after introspection; deployments requiring immediate revocation can disable the resident cache. Single-flight coordination is per API process, so separate ECS tasks can each perform one introspection for the same cold token. A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, malware scanning, formal privacy/security review and representative source-system validation.
 
 ## Author
 

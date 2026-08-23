@@ -44,6 +44,20 @@ The security tradeoff is explicit: a token revoked immediately after a successfu
 
 Prometheus output records cache hits, misses, expirations, disabled-cache requests, upstream successes/errors and recent IdP introspection p50/p95/p99 latency. These measures allow the cache benefit and IdP dependency behavior to be checked rather than assumed.
 
+## Per-token single-flight coordination
+
+A short cache does not by itself prevent a cache stampede. If several requests for the same cold or just-expired bearer token arrive together, each request could observe the miss before the first introspection completes and all of them could call the IdP.
+
+The backend therefore keeps a small per-process in-flight registry keyed by the same HMAC token/config digest used by the resident cache. The first request for a key becomes the leader and performs the upstream introspection. Concurrent requests for that same key wait on the leader's completion event and reuse its current result. The registry lock protects only lookup, insertion and removal; it is not held while the network request runs, so different token/config keys remain concurrent.
+
+Successful active-token results are published to the current waiting group and then follow the existing TTL/`exp` cache rules. Authentication failures and IdP 503 responses can be shared with requests already waiting on that flight, but they are not added to the resident cache. A later request therefore attempts introspection again rather than inheriting a cached failure. Setting the cache TTL to zero disables resident reuse but still allows simultaneous requests to coalesce while one introspection is in flight.
+
+Follower waiting is bounded by the configured upstream timeout plus one second. If the leader does not complete inside that coordination window, the follower fails with 503 instead of waiting indefinitely. Telemetry distinguishes leaders, joined requests, shared successes/errors and wait timeouts.
+
+Threaded regression tests exercise four concurrency properties: eight simultaneous same-token requests collapse to one simulated upstream introspection; two different tokens reach a barrier inside the simulated IdP concurrently; a shared upstream failure returns 503 to the current group but is retried by a later request; and TTL-zero mode coalesces only the concurrent work.
+
+This coordination is intentionally **per API process**. Separate ECS tasks do not share the in-flight registry, so a cold token can still cause one introspection per task. The repository does not claim a distributed lock or distributed identity cache.
+
 ## Why introspection is kept behind an adapter
 
 The route layer depends only on the existing `Actor` and `require_roles` interface. Local demo identity and external IdP identity therefore produce the same application principal. Authentication remains separate from submission, review and audit logic.
@@ -106,4 +120,4 @@ CloudWatch receives container logs. `/ready` checks database access and writable
 
 The dedicated workflow runs Ruff, strict MyPy, backend tests with the 90% coverage threshold, a PostgreSQL 16 migration-and-test contract, shell syntax validation for the container entrypoint, `terraform fmt -check`, `terraform init -backend=false` and `terraform validate`.
 
-Passing these checks supports claims about tested Python/PostgreSQL behavior and statically validated Terraform. It does **not** support a claim that the AWS stack has been applied or operated in production.
+Passing these checks supports claims about tested Python/PostgreSQL behavior and statically validated Terraform. The OIDC tests use a simulated IdP boundary, including the threaded single-flight cases. These checks do **not** support a claim that the AWS stack has been applied, that a real IdP integration has been operated, or that single-flight coordination spans multiple service tasks.
