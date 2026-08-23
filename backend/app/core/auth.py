@@ -9,7 +9,7 @@ import os
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from threading import Lock
+from threading import Event, Lock
 from time import perf_counter, time
 from typing import Annotated, Literal, cast
 from urllib.error import HTTPError, URLError
@@ -52,8 +52,24 @@ class CachedActor:
     expires_at: float
 
 
+@dataclass(frozen=True)
+class SharedHttpError:
+    status_code: int
+    detail: object
+    headers: dict[str, str] | None
+
+
+@dataclass
+class OidcFlight:
+    completed: Event
+    actor: Actor | None = None
+    error: SharedHttpError | None = None
+
+
 _OIDC_CACHE: OrderedDict[str, CachedActor] = OrderedDict()
 _OIDC_CACHE_LOCK = Lock()
+_OIDC_INFLIGHT: dict[str, OidcFlight] = {}
+_OIDC_INFLIGHT_LOCK = Lock()
 
 
 def _http_error(status_code: int, detail: str) -> HTTPException:
@@ -289,6 +305,24 @@ def _store_cached_actor(
 def _clear_oidc_cache() -> None:
     with _OIDC_CACHE_LOCK:
         _OIDC_CACHE.clear()
+    with _OIDC_INFLIGHT_LOCK:
+        _OIDC_INFLIGHT.clear()
+
+
+def _snapshot_http_error(exc: HTTPException) -> SharedHttpError:
+    return SharedHttpError(
+        status_code=exc.status_code,
+        detail=exc.detail,
+        headers=dict(exc.headers) if exc.headers else None,
+    )
+
+
+def _raise_shared_http_error(error: SharedHttpError) -> None:
+    raise HTTPException(
+        status_code=error.status_code,
+        detail=error.detail,
+        headers=error.headers,
+    )
 
 
 def _introspect_token(token: str, config: OidcIntrospectionSettings) -> tuple[Actor, float | None]:
@@ -326,6 +360,60 @@ def _introspect_token(token: str, config: OidcIntrospectionSettings) -> tuple[Ac
     actor, token_expiry = _actor_from_introspection_claims(payload, config)
     telemetry.record_oidc("upstream_success", (perf_counter() - started) * 1000)
     return actor, token_expiry
+
+
+def _introspect_singleflight(token: str, config: OidcIntrospectionSettings) -> Actor:
+    key = _cache_key(token, config)
+    with _OIDC_INFLIGHT_LOCK:
+        flight = _OIDC_INFLIGHT.get(key)
+        if flight is None:
+            flight = OidcFlight(completed=Event())
+            _OIDC_INFLIGHT[key] = flight
+            leader = True
+        else:
+            leader = False
+
+    if not leader:
+        telemetry.record_oidc("singleflight_join")
+        if not flight.completed.wait(timeout=config.timeout_seconds + 1.0):
+            telemetry.record_oidc("singleflight_wait_timeout")
+            raise _http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Identity provider introspection coordination timed out.",
+            )
+        if flight.error is not None:
+            telemetry.record_oidc("singleflight_shared_error")
+            _raise_shared_http_error(flight.error)
+        if flight.actor is None:
+            telemetry.record_oidc("singleflight_invalid_result")
+            raise _http_error(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "Identity provider introspection coordination failed.",
+            )
+        telemetry.record_oidc("singleflight_shared_success")
+        return flight.actor
+
+    telemetry.record_oidc("singleflight_leader")
+    try:
+        actor, token_expiry = _introspect_token(token, config)
+        _store_cached_actor(token, actor, token_expiry, config)
+        flight.actor = actor
+        return actor
+    except HTTPException as exc:
+        flight.error = _snapshot_http_error(exc)
+        raise
+    except BaseException:
+        flight.error = SharedHttpError(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Identity provider introspection coordination failed.",
+            headers=None,
+        )
+        raise
+    finally:
+        flight.completed.set()
+        with _OIDC_INFLIGHT_LOCK:
+            if _OIDC_INFLIGHT.get(key) is flight:
+                del _OIDC_INFLIGHT[key]
 
 
 def _demo_actor(user: str, role: str) -> Actor:
@@ -373,9 +461,7 @@ def get_actor(
     if cached_actor is not None:
         return cached_actor
 
-    actor, token_expiry = _introspect_token(token, config)
-    _store_cached_actor(token, actor, token_expiry, config)
-    return actor
+    return _introspect_singleflight(token, config)
 
 
 def require_roles(*allowed: Role) -> Callable[..., Actor]:
