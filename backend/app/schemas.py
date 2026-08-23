@@ -81,7 +81,7 @@ class SubmissionCursorPage(BaseModel):
 class ReviewRequest(BaseModel):
     decision: ReviewDecision
     rationale: str = Field(min_length=20, max_length=2000)
-    expected_version: int = Field(ge=1)
+    expected_version: int | None = Field(default=None, ge=1)
 
 
 class TopFindingOut(BaseModel):
