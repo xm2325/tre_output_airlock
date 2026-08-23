@@ -201,4 +201,6 @@ def test_review_audit_failure_rolls_back_atomic_decision(
         assert persisted.review_rationale is None
         assert persisted.claimed_by == "xiaomei-reviewer"
         assert persisted.row_version == expected_version
-        assert all(event.event_type != "MANUAL_REVIEW_COMPLETED" for event in persisted.audit_events)
+        assert all(
+            event.event_type != "MANUAL_REVIEW_COMPLETED" for event in persisted.audit_events
+        )
