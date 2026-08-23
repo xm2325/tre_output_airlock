@@ -8,8 +8,8 @@ from fastapi.testclient import TestClient
 
 TEST_ROOT = Path(__file__).parent / ".runtime"
 TEST_ROOT.mkdir(parents=True, exist_ok=True)
-os.environ["AIRLOCK_DATABASE_URL"] = f"sqlite:///{TEST_ROOT / 'test.db'}"
-os.environ["AIRLOCK_QUARANTINE_DIR"] = str(TEST_ROOT / "quarantine")
+os.environ.setdefault("AIRLOCK_DATABASE_URL", f"sqlite:///{TEST_ROOT / 'test.db'}")
+os.environ.setdefault("AIRLOCK_QUARANTINE_DIR", str(TEST_ROOT / "quarantine"))
 
 from app.db import Base, engine  # noqa: E402
 from app.main import app  # noqa: E402

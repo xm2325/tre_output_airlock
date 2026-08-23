@@ -52,6 +52,7 @@ class Settings:
     quarantine_dir: Path = Path(os.getenv("AIRLOCK_QUARANTINE_DIR", "./quarantine"))
     max_file_size_mb: int = int(os.getenv("AIRLOCK_MAX_FILE_SIZE_MB", "5"))
     retention_days: int = int(os.getenv("AIRLOCK_RETENTION_DAYS", "30"))
+    review_claim_ttl_minutes: int = int(os.getenv("AIRLOCK_REVIEW_CLAIM_TTL_MINUTES", "30"))
     report_signing_secret: str = os.getenv("AIRLOCK_REPORT_SIGNING_SECRET", "demo-only-change-me")
     auto_create_schema: bool = _as_bool(os.getenv("AIRLOCK_AUTO_CREATE_SCHEMA", "true"))
     cors_origins: tuple[str, ...] = _split_csv(
