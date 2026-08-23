@@ -1,0 +1,53 @@
+name: Refresh v0.9 README once
+
+on:
+  push:
+    branches: [rds-pool-contract-v0.9]
+    paths:
+      - ".github/workflows/refresh-v0.9-readme-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: rds-pool-contract-v0.9
+      - name: Update v0.9 evidence text exactly
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("README.md")
+          text = path.read_text()
+          replacements = {
+              "| PostgreSQL / RDS | PostgreSQL-backed local stack, RDS-style configuration, one-off migration contract for multi-task deployment, and PostgreSQL 16 CI that applies Alembic then runs the full backend suite |":
+              "| PostgreSQL / RDS | PostgreSQL-backed local stack, RDS-style configuration, explicit bounded per-task SQLAlchemy pool sizing/timeouts/recycling, one-off migration contract, and PostgreSQL 16 CI that exercises pool exhaustion and recovery |",
+              "Runtime database credentials, the IdP client secret and report-signing material are injected through Secrets Manager. The service task has no public IP. The application task role intentionally has no AWS control-plane permissions because the current FastAPI process does not call AWS APIs directly. The ECS reference also passes the bounded OIDC cache TTL/capacity settings to each task.":
+              "Runtime database credentials, the IdP client secret and report-signing material are injected through Secrets Manager. The service task has no public IP. The application task role intentionally has no AWS control-plane permissions because the current FastAPI process does not call AWS APIs directly. The ECS reference passes both the bounded OIDC cache settings and the PostgreSQL pool budget to each task. The default application budget is 5 persistent connections plus 5 overflow connections per task; production sizing must account for task count and database headroom.",
+              "- **61 backend tests** with **91.88% coverage** against a 90% gate;":
+              "- **70 backend tests collected**: **69 passed + 1 PostgreSQL-only skipped** on the standard backend job with **91.80% coverage** against a 90% gate;",
+              "The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies the real Alembic migration and runs the full backend suite against PostgreSQL. It also checks Terraform format, `init -backend=false` and `validate`. These checks validate code and configuration; they do not demonstrate a live AWS or real IdP deployment.":
+              "The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies the real Alembic migration and runs **70/70 backend tests** against PostgreSQL. Its pool contract uses 3 persistent + 2 overflow connections, occupies all five, verifies a sixth checkout fails at the configured 0.2-second timeout, releases them, then reconnects and executes `SELECT 1`. It also checks Terraform format, `init -backend=false` and `validate`. These checks validate code and configuration; they do not demonstrate a live AWS or real IdP deployment.",
+              "A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, malware scanning, formal privacy/security review and representative source-system validation.":
+              "A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, pool sizing against the deployed RDS `max_connections` and ECS task count with migration/administration/failover headroom, malware scanning, formal privacy/security review and representative source-system validation.",
+          }
+          for old, new in replacements.items():
+              if old not in text:
+                  raise SystemExit(f"Expected README text not found: {old[:100]!r}")
+              text = text.replace(old, new, 1)
+          path.write_text(text)
+          PY
+          git diff --check
+          git diff -- README.md
+      - name: Commit README
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git diff --cached --quiet && exit 0
+          git commit -m "docs: record v0.9 PostgreSQL pool evidence"
+          git push origin HEAD:rds-pool-contract-v0.9
