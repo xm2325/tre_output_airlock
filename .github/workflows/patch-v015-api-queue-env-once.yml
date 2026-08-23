@@ -1,0 +1,41 @@
+name: Patch v0.15 API queue env once
+
+on:
+  push:
+    branches: [async-scan-worker-v0.15]
+    paths:
+      - ".patch-v015-api-queue-env-trigger"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: async-scan-worker-v0.15
+      - name: Configure API for durable queued scan mode
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path('infra/aws/backend_service/main.tf')
+          text = path.read_text()
+          anchor = '''        { name = "AIRLOCK_RUN_MIGRATIONS", value = "false" },\n        { name = "AIRLOCK_QUARANTINE_DIR", value = "/mnt/airlock/quarantine" },\n'''
+          replacement = '''        { name = "AIRLOCK_RUN_MIGRATIONS", value = "false" },\n        { name = "AIRLOCK_SCAN_MODE", value = "queued" },\n        { name = "AIRLOCK_SCAN_QUEUE_URL", value = aws_sqs_queue.scan.url },\n        { name = "AIRLOCK_AWS_REGION", value = var.aws_region },\n        { name = "AIRLOCK_QUARANTINE_DIR", value = "/mnt/airlock/quarantine" },\n'''
+          if anchor not in text:
+              raise SystemExit('API environment anchor missing')
+          path.write_text(text.replace(anchor, replacement, 1))
+          PY
+          git diff --check
+      - name: Commit API queue environment
+        run: |
+          rm -f .patch-v015-api-queue-env-trigger
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add infra/aws/backend_service/main.tf
+          git diff --cached --quiet && exit 0
+          git commit -m "infra: route API uploads through queued scan mode"
+          git push origin HEAD:async-scan-worker-v0.15
