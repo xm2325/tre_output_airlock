@@ -14,6 +14,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  release-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check cross-stack release version
+        run: python scripts/check_release_version.py
+
   backend:
     runs-on: ubuntu-latest
     defaults:
@@ -111,7 +121,7 @@ jobs:
 
   integration:
     runs-on: ubuntu-latest
-    needs: [backend, frontend, compose-config]
+    needs: [release-contract, backend, frontend, compose-config]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
