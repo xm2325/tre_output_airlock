@@ -1,0 +1,56 @@
+name: Patch v0.14 doc hygiene once
+
+on:
+  push:
+    branches: [upload-idempotency-v0.14]
+    paths:
+      - ".docs-v014-trigger"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: upload-idempotency-v0.14
+      - name: Refresh current engineering evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if old not in text:
+                  raise SystemExit(f"Expected anchor missing in {path}: {old[:180]!r}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "README.md",
+              "| Concurrency and workflow safety | Strong submission ETags and `If-Match`, database `row_version` compare-and-swap for claims and final review decisions, transactional audit persistence, 30-minute review-claim leases, expired-claim recovery and legacy version compatibility |",
+              "| Concurrency and workflow safety | Strong submission ETags and `If-Match`, database `row_version` compare-and-swap for claims and final review decisions, actor-scoped payload-bound upload idempotency with PostgreSQL unique-race recovery, transactional audit persistence, 30-minute review-claim leases and expired-claim recovery |",
+          )
+          replace_once(
+              "docs/identity-and-backend-platform.md",
+              "The AWS backend workflow starts PostgreSQL 16, applies the Alembic migration and runs all 70 backend tests against PostgreSQL.",
+              "The AWS backend workflow starts PostgreSQL 16, applies Alembic through the current migration head and runs the full backend test contract against PostgreSQL.",
+          )
+          replace_once(
+              "docs/identity-and-backend-platform.md",
+              "The standard SQLite coverage job now collects 71 tests; the PostgreSQL-only saturation contract is skipped there, producing 70 passed / 1 skipped with 91.07% coverage. The dedicated PostgreSQL path also collects 71 tests, with 70 passed / 1 SQLite-only skipped.",
+              "The current v0.14 backend contract collects 92 tests. The standard SQLite coverage path passes 90 with two PostgreSQL-only skips at 90.23% coverage, while the dedicated PostgreSQL 16 path passes 91 with one SQLite-only skip. The PostgreSQL path additionally exercises the barrier-forced upload-idempotency race and the existing pool-saturation contract.",
+          )
+          PY
+          git diff --check
+      - name: Commit documentation hygiene
+        run: |
+          rm -f .docs-v014-trigger
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "docs: align v0.14 engineering evidence"
+          git push origin HEAD:upload-idempotency-v0.14
