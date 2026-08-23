@@ -61,7 +61,7 @@ jobs:
         run: |
           export AIRLOCK_DATABASE_URL="sqlite:///$RUNNER_TEMP/migration.db"
           uv run alembic upgrade head
-          test "$(uv run alembic current | tr -d '[:space:]')" = "0001(head)"
+          test "$(uv run alembic current | tr -d '[:space:]')" = "0002(head)"
       - name: Generate OpenAPI schema
         run: uv run python ../scripts/export_openapi.py --output "$RUNNER_TEMP/openapi.json"
       - name: Run synthetic policy benchmark

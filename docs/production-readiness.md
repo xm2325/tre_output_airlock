@@ -5,7 +5,7 @@ This document separates what the repository demonstrates from work required befo
 | Area | Repository evidence | Required next step |
 |---|---|---|
 | Identity | local demo identity plus tested OAuth2/OIDC token introspection, issuer/audience/expiry checks, configurable IdP group-to-RBAC mapping, bounded short-lived successful-token caching and per-process keyed single-flight coordination | approved IdP tenant and claim contract, credential rotation, revocation/latency policy, representative integration testing and multi-instance IdP load testing |
-| Database | PostgreSQL Compose service, Alembic migration, optimistic concurrency, RDS-style configuration, bounded per-task SQLAlchemy pool settings, `pool_pre_ping`, checkout timeout/recycle controls, PostgreSQL 16 exhaustion/recovery testing and CI-validated RDS reference infrastructure | applied managed RDS environment, backup/restore tests, least-privilege database roles, capacity calibration against the actual RDS connection limit and ECS task count, and failover testing |
+| Database | PostgreSQL Compose service, Alembic migrations, optimistic concurrency, bounded signed keyset submission pagination, composite cursor indexes, RDS-style configuration, bounded per-task SQLAlchemy pool settings, `pool_pre_ping`, checkout timeout/recycle controls, PostgreSQL 16 exhaustion/recovery testing and CI-validated RDS reference infrastructure | applied managed RDS environment, representative-cardinality pagination/load testing, backup/restore tests, least-privilege database roles, capacity calibration against the actual RDS connection limit and ECS task count, and failover testing |
 | Review concurrency | compare-and-swap `row_version`, transactional claim/audit write and expiring review-claim lease | representative multi-instance load/concurrency testing and operational tuning of the lease duration |
 | Storage | quarantine directory, explicit retirement and encrypted EFS/S3 reference controls | approved encrypted storage, bucket/file-system policy, malware scanning, retention enforcement and legal-hold design where required |
 | Processing | deterministic synchronous checks | isolated asynchronous workers, malware scan, parser timeouts, retries and workload resource limits |
@@ -37,6 +37,14 @@ The application pool budget is **per API task**, not a service-wide global cap. 
 The dedicated PostgreSQL 16 CI job deliberately uses a smaller `3 + 2` budget with a 0.2-second checkout timeout. Its PostgreSQL-only regression test opens all five allowed connections, verifies the live Prometheus gauges show full utilisation and zero remaining capacity, confirms readiness and a database-backed API return 503 while saturated, checks the checkout-timeout counter increases, closes every held connection, confirms the gauges recover, readiness returns 200 and `SELECT 1` succeeds on a new connection. This validates bounded exhaustion, observability and recovery; it does not determine the correct production capacity for a particular RDS instance.
 
 Production values must therefore be chosen from the actual RDS `max_connections`, expected ECS task count and scaling range, request concurrency and transaction duration, with explicit headroom for migrations, administration, monitoring and failover.
+
+## Submission pagination boundary
+
+The API keeps the existing bounded page/offset submission endpoint for browser compatibility and adds a separate signed keyset endpoint for deeper traversal. The keyset cursor is HMAC-protected and bound to the authenticated actor, active filters and sort order, so a tampered cursor or one reused under a different query contract is rejected. Stable unique-ID tie-breakers are used for `newest`, `oldest` and `risk_desc`, and the endpoint fetches only `limit + 1` rows rather than running a total-count query.
+
+Alembic revision `0002` adds `(created_at, id)` and `(risk_score DESC, created_at ASC, id ASC)` indexes. PostgreSQL 16 CI applies the real migration and verifies both indexes through `pg_indexes` before running the backend suite. This demonstrates the query/index contract, not production-scale latency. Representative-cardinality load tests and query-plan evidence are still required before making performance claims.
+
+Keyset pagination is not snapshot isolation. Concurrent inserts, deletes or rechecks can change the result set while a client traverses it; in particular, a recheck that changes `risk_score` can move a submission across a `risk_desc` cursor boundary. A production consumer that requires a frozen export must use an explicit snapshot/versioning design rather than treating this cursor as a snapshot token.
 
 ## Release gates
 
