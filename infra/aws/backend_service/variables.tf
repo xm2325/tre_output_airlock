@@ -13,7 +13,8 @@ variable "project_name" {
 variable "environment" {
   description = "Deployment environment such as dev, staging or prod."
   type        = string
-  default     = "dev"
+
+  default = "dev"
 }
 
 variable "vpc_id" {
@@ -63,6 +64,56 @@ variable "database_multi_az" {
   description = "Whether the RDS instance is Multi-AZ."
   type        = bool
   default     = false
+}
+
+variable "database_pool_size" {
+  description = "Persistent PostgreSQL connections retained by each API task."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.database_pool_size >= 1 && var.database_pool_size <= 20
+    error_message = "Database pool size must be between 1 and 20 connections per task."
+  }
+}
+
+variable "database_max_overflow" {
+  description = "Temporary PostgreSQL connections allowed above pool_size for each API task."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.database_max_overflow >= 0 && var.database_max_overflow <= 20
+    error_message = "Database max overflow must be between 0 and 20 connections per task."
+  }
+}
+
+variable "database_pool_timeout_seconds" {
+  description = "Maximum time an API request waits for a PostgreSQL connection checkout."
+  type        = number
+  default     = 5
+
+  validation {
+    condition = (
+      var.database_pool_timeout_seconds >= 0.1 &&
+      var.database_pool_timeout_seconds <= 30
+    )
+    error_message = "Database pool timeout must be between 0.1 and 30 seconds."
+  }
+}
+
+variable "database_pool_recycle_seconds" {
+  description = "Maximum age before a checked-out PostgreSQL connection is recycled."
+  type        = number
+  default     = 900
+
+  validation {
+    condition = (
+      var.database_pool_recycle_seconds >= 30 &&
+      var.database_pool_recycle_seconds <= 3600
+    )
+    error_message = "Database pool recycle interval must be between 30 and 3600 seconds."
+  }
 }
 
 variable "oidc_introspection_url" {
