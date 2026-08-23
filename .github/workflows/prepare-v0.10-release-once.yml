@@ -1,0 +1,85 @@
+name: Prepare v0.10 release once
+
+on:
+  push:
+    branches: [database-pool-observability-v0.10]
+    paths:
+      - ".github/workflows/prepare-v0.10-release-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: database-pool-observability-v0.10
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Refresh generated lock metadata
+        run: |
+          cd backend && uv lock
+          cd ../frontend && npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Update v0.10 engineering evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if old not in text:
+                  raise SystemExit(f"Expected anchor missing in {path}: {old[:120]!r}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "README.md",
+              "| PostgreSQL / RDS | PostgreSQL-backed local stack, RDS-style configuration, explicit bounded per-task SQLAlchemy pool sizing/timeouts/recycling, one-off migration contract, and PostgreSQL 16 CI that exercises pool exhaustion and recovery |",
+              "| PostgreSQL / RDS | PostgreSQL-backed local stack, bounded per-task SQLAlchemy pool sizing/timeouts/recycling, live Prometheus pool saturation gauges, explicit 503 checkout-timeout handling, one-off migrations, and PostgreSQL 16 exhaustion/recovery CI |",
+          )
+          replace_once(
+              "README.md",
+              "- Prometheus-style HTTP, OIDC cache/single-flight and IdP latency metrics plus readiness checks;",
+              "- Prometheus-style HTTP, OIDC cache/single-flight, IdP latency and live PostgreSQL pool saturation/timeout metrics plus readiness checks;",
+          )
+          replace_once(
+              "README.md",
+              "- **70 backend tests collected**: **69 passed + 1 PostgreSQL-only skipped** on the standard backend job with **91.80% coverage** against a 90% gate;",
+              "- **71 backend tests collected**: **70 passed + 1 PostgreSQL-only skipped** on the standard SQLite backend job with **91.07% coverage** against a 90% gate;",
+          )
+          replace_once(
+              "README.md",
+              "The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies the real Alembic migration and runs **70/70 backend tests** against PostgreSQL. Its pool contract uses 3 persistent + 2 overflow connections, occupies all five, verifies a sixth checkout fails at the configured 0.2-second timeout, releases them, then reconnects and executes `SELECT 1`. It also checks Terraform format, `init -backend=false` and `validate`. These checks validate code and configuration; they do not demonstrate a live AWS or real IdP deployment.",
+              "The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies the real Alembic migration and collects the same **71 tests**, with **70 passed + 1 SQLite-only skipped**. Its pool contract uses 3 persistent + 2 overflow connections, occupies all five, verifies live metrics report utilisation `1.0` and zero remaining capacity, checks `/ready` and a database-backed API return **503** under exhaustion, verifies the checkout-timeout counter increments, releases the held connections, then confirms utilisation returns to `0.0`, readiness recovers and `SELECT 1` succeeds. It also checks Terraform format, `init -backend=false` and `validate`. These checks validate code and configuration; they do not demonstrate a live AWS or real IdP deployment.",
+          )
+
+          identity_anchor = "The standard SQLite coverage job collects the same 70 tests; the PostgreSQL-only pool test is skipped there, producing 69 passed / 1 skipped with 91.80% coverage. The dedicated PostgreSQL path runs 70/70."
+          identity_new = """The standard SQLite coverage job now collects 71 tests; the PostgreSQL-only saturation contract is skipped there, producing 70 passed / 1 skipped with 91.07% coverage. The dedicated PostgreSQL path also collects 71 tests, with 70 passed / 1 SQLite-only skipped.\n\n## Database pool observability\n\nThe existing `/metrics` endpoint exposes live **per-process** PostgreSQL QueuePool state: configured persistent size, maximum overflow, total capacity, checked-out and checked-in connections, open overflow connections, remaining checkout capacity and a utilisation ratio. It also exposes a cumulative checkout-timeout counter. SQLite deliberately emits none of these PostgreSQL/RDS pool gauges.\n\nWhen a normal database-backed API request cannot obtain a connection before `pool_timeout`, the service translates SQLAlchemy `TimeoutError` into HTTP 503 with an explicit temporary database-capacity message instead of reporting an internal 500. The readiness path retains its dependency-unavailable 503 contract and records the same pool-timeout counter when exhaustion is the cause.\n\nThe PostgreSQL 16 CI contract fills all five configured `3 + 2` connections, verifies metrics report checked-out capacity of five, zero remaining capacity, utilisation `1.0` and two open overflow connections, then exercises both `/ready` and a database-backed API while saturated. Both return 503 and the timeout counter increases by two. After the held connections are released, the contract verifies checked-out returns to zero, full capacity is available, utilisation returns to `0.0`, readiness returns 200 and a fresh `SELECT 1` succeeds.\n\nThese gauges describe one API process. They are not aggregate ECS-service or RDS-instance metrics; production operations still need service-level aggregation, RDS/CloudWatch metrics, dashboards and alert thresholds.\n"""
+          replace_once("docs/identity-and-backend-platform.md", identity_anchor, identity_new)
+
+          replace_once(
+              "docs/production-readiness.md",
+              "| Operations | database/storage readiness checks, Prometheus-style HTTP telemetry, OIDC cache/single-flight outcomes, IdP latency and queue-age measures | dashboards, service-level objectives, paging, dependency-specific alerts, database-pool observability and incident response |",
+              "| Operations | database/storage readiness checks, Prometheus HTTP telemetry, OIDC cache/single-flight outcomes, IdP latency, live per-process PostgreSQL pool capacity/utilisation gauges and checkout-timeout counts | dashboards, service-level objectives, paging, aggregate RDS/ECS capacity alerts, dependency-specific alerts and incident response |",
+          )
+          replace_once(
+              "docs/production-readiness.md",
+              "The dedicated PostgreSQL 16 CI job deliberately uses a smaller `3 + 2` budget with a 0.2-second checkout timeout. Its PostgreSQL-only regression test opens all five allowed connections, verifies that a sixth checkout raises SQLAlchemy `TimeoutError`, closes every held connection, confirms the checked-out count returns to zero, and successfully executes `SELECT 1` on a new connection. This validates the pool behavior; it does not determine the correct production capacity for a particular RDS instance.",
+              "The dedicated PostgreSQL 16 CI job deliberately uses a smaller `3 + 2` budget with a 0.2-second checkout timeout. Its PostgreSQL-only regression test opens all five allowed connections, verifies the live Prometheus gauges show full utilisation and zero remaining capacity, confirms readiness and a database-backed API return 503 while saturated, checks the checkout-timeout counter increases, closes every held connection, confirms the gauges recover, readiness returns 200 and `SELECT 1` succeeds on a new connection. This validates bounded exhaustion, observability and recovery; it does not determine the correct production capacity for a particular RDS instance.",
+          )
+          PY
+          git diff --check
+      - name: Commit generated release evidence
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/uv.lock frontend/package-lock.json README.md docs/identity-and-backend-platform.md docs/production-readiness.md
+          git diff --cached --quiet && exit 0
+          git commit -m "release: prepare v0.10 observability evidence"
+          git push origin HEAD:database-pool-observability-v0.10
