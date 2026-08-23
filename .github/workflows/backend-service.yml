@@ -99,6 +99,43 @@ jobs:
           python-version: "3.12"
       - run: uv sync --frozen --all-extras
       - name: Apply Alembic migration to PostgreSQL
-        run: uv run alembic upgrade head
+        run: |
+          uv run alembic upgrade head
+          test "$(uv run alembic current | tr -d '[:space:]')" = "0002(head)"
+      - name: Verify cursor pagination indexes
+        run: |
+          uv run python - <<'PY'
+          import os
+
+          from sqlalchemy import create_engine, text
+
+          engine = create_engine(os.environ["AIRLOCK_DATABASE_URL"])
+          with engine.connect() as connection:
+              rows = connection.execute(
+                  text(
+                      """
+                      SELECT indexname, indexdef
+                      FROM pg_indexes
+                      WHERE schemaname = 'public'
+                        AND tablename = 'submissions'
+                        AND indexname IN (
+                          'ix_submissions_created_id',
+                          'ix_submissions_risk_cursor'
+                        )
+                      ORDER BY indexname
+                      """
+                  )
+              ).all()
+          definitions = {name: definition for name, definition in rows}
+          assert set(definitions) == {
+              "ix_submissions_created_id",
+              "ix_submissions_risk_cursor",
+          }, definitions
+          assert "created_at, id" in definitions["ix_submissions_created_id"]
+          risk_definition = definitions["ix_submissions_risk_cursor"]
+          assert "risk_score DESC" in risk_definition
+          assert "created_at" in risk_definition and "id" in risk_definition
+          print("cursor pagination indexes verified")
+          PY
       - name: Run backend suite against PostgreSQL
         run: uv run pytest -q
