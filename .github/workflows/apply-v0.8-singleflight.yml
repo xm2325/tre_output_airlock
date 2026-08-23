@@ -1,0 +1,203 @@
+name: Apply v0.8 OIDC single-flight core once
+
+on:
+  push:
+    branches: [oidc-singleflight-v0.8]
+    paths:
+      - ".github/workflows/apply-v0.8-singleflight.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: oidc-singleflight-v0.8
+      - name: Add keyed OIDC single-flight coordination
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/app/core/auth.py")
+          text = path.read_text(encoding="utf-8")
+
+          old = "from threading import Lock\n"
+          new = "from threading import Event, Lock\n"
+          if old not in text:
+              raise SystemExit("threading import anchor not found")
+          text = text.replace(old, new, 1)
+
+          old = '''@dataclass(frozen=True)
+          class CachedActor:
+              actor: Actor
+              expires_at: float
+
+
+          _OIDC_CACHE: OrderedDict[str, CachedActor] = OrderedDict()
+          _OIDC_CACHE_LOCK = Lock()
+          '''.replace("          ", "")
+          new = '''@dataclass(frozen=True)
+          class CachedActor:
+              actor: Actor
+              expires_at: float
+
+
+          @dataclass(frozen=True)
+          class SharedHttpError:
+              status_code: int
+              detail: object
+              headers: dict[str, str] | None
+
+
+          @dataclass
+          class OidcFlight:
+              completed: Event
+              actor: Actor | None = None
+              error: SharedHttpError | None = None
+
+
+          _OIDC_CACHE: OrderedDict[str, CachedActor] = OrderedDict()
+          _OIDC_CACHE_LOCK = Lock()
+          _OIDC_INFLIGHT: dict[str, OidcFlight] = {}
+          _OIDC_INFLIGHT_LOCK = Lock()
+          '''.replace("          ", "")
+          if old not in text:
+              raise SystemExit("cache dataclass anchor not found")
+          text = text.replace(old, new, 1)
+
+          old = '''def _clear_oidc_cache() -> None:
+              with _OIDC_CACHE_LOCK:
+                  _OIDC_CACHE.clear()
+
+
+          def _introspect_token(
+          '''.replace("          ", "")
+          new = '''def _clear_oidc_cache() -> None:
+              with _OIDC_CACHE_LOCK:
+                  _OIDC_CACHE.clear()
+              with _OIDC_INFLIGHT_LOCK:
+                  _OIDC_INFLIGHT.clear()
+
+
+          def _snapshot_http_error(exc: HTTPException) -> SharedHttpError:
+              return SharedHttpError(
+                  status_code=exc.status_code,
+                  detail=exc.detail,
+                  headers=dict(exc.headers) if exc.headers else None,
+              )
+
+
+          def _raise_shared_http_error(error: SharedHttpError) -> None:
+              raise HTTPException(
+                  status_code=error.status_code,
+                  detail=error.detail,
+                  headers=error.headers,
+              )
+
+
+          def _introspect_token(
+          '''.replace("          ", "")
+          if old not in text:
+              raise SystemExit("clear-cache anchor not found")
+          text = text.replace(old, new, 1)
+
+          old = '''    actor, token_expiry = _actor_from_introspection_claims(payload, config)
+              telemetry.record_oidc("upstream_success", (perf_counter() - started) * 1000)
+              return actor, token_expiry
+
+
+          def _demo_actor(user: str, role: str) -> Actor:
+          '''.replace("          ", "")
+          new = '''    actor, token_expiry = _actor_from_introspection_claims(payload, config)
+              telemetry.record_oidc("upstream_success", (perf_counter() - started) * 1000)
+              return actor, token_expiry
+
+
+          def _introspect_singleflight(token: str, config: OidcIntrospectionSettings) -> Actor:
+              key = _cache_key(token, config)
+              with _OIDC_INFLIGHT_LOCK:
+                  flight = _OIDC_INFLIGHT.get(key)
+                  if flight is None:
+                      flight = OidcFlight(completed=Event())
+                      _OIDC_INFLIGHT[key] = flight
+                      leader = True
+                  else:
+                      leader = False
+
+              if not leader:
+                  telemetry.record_oidc("singleflight_join")
+                  if not flight.completed.wait(timeout=config.timeout_seconds + 1.0):
+                      telemetry.record_oidc("singleflight_wait_timeout")
+                      raise _http_error(
+                          status.HTTP_503_SERVICE_UNAVAILABLE,
+                          "Identity provider introspection coordination timed out.",
+                      )
+                  if flight.error is not None:
+                      telemetry.record_oidc("singleflight_shared_error")
+                      _raise_shared_http_error(flight.error)
+                  if flight.actor is None:
+                      telemetry.record_oidc("singleflight_invalid_result")
+                      raise _http_error(
+                          status.HTTP_503_SERVICE_UNAVAILABLE,
+                          "Identity provider introspection coordination failed.",
+                      )
+                  telemetry.record_oidc("singleflight_shared_success")
+                  return flight.actor
+
+              telemetry.record_oidc("singleflight_leader")
+              try:
+                  actor, token_expiry = _introspect_token(token, config)
+                  _store_cached_actor(token, actor, token_expiry, config)
+                  flight.actor = actor
+                  return actor
+              except HTTPException as exc:
+                  flight.error = _snapshot_http_error(exc)
+                  raise
+              except BaseException:
+                  flight.error = SharedHttpError(
+                      status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                      detail="Identity provider introspection coordination failed.",
+                      headers=None,
+                  )
+                  raise
+              finally:
+                  flight.completed.set()
+                  with _OIDC_INFLIGHT_LOCK:
+                      if _OIDC_INFLIGHT.get(key) is flight:
+                          del _OIDC_INFLIGHT[key]
+
+
+          def _demo_actor(user: str, role: str) -> Actor:
+          '''.replace("          ", "")
+          if old not in text:
+              raise SystemExit("introspection insertion anchor not found")
+          text = text.replace(old, new, 1)
+
+          old = '''    actor, token_expiry = _introspect_token(token, config)
+              _store_cached_actor(token, actor, token_expiry, config)
+              return actor
+          '''.replace("          ", "")
+          new = '''    return _introspect_singleflight(token, config)
+          '''.replace("          ", "")
+          if old not in text:
+              raise SystemExit("get_actor introspection anchor not found")
+          text = text.replace(old, new, 1)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+      - name: Validate exact patch before commit
+        run: |
+          python -m py_compile backend/app/core/auth.py
+          git diff --check
+          grep -q 'singleflight_join' backend/app/core/auth.py
+          grep -q 'return _introspect_singleflight(token, config)' backend/app/core/auth.py
+      - name: Commit core implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/core/auth.py
+          git commit -m "feat: collapse concurrent OIDC introspection misses"
+          git push origin HEAD:oidc-singleflight-v0.8
