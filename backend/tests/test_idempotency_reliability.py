@@ -11,6 +11,7 @@ import app.api.submission_routes as submission_routes
 from app.core.config import settings
 from app.core.idempotency import idempotency_scope_key
 from app.db import SessionLocal, engine
+from app.main import app
 from app.models import IdempotencyRecord, Submission
 
 RESEARCHER = {"X-Demo-User": "xiaomei-researcher", "X-Demo-Role": "researcher"}
@@ -130,10 +131,7 @@ def test_scope_digest_is_actor_bound_without_storing_raw_key() -> None:
     engine.dialect.name != "postgresql",
     reason="Concurrent first-request race contract requires PostgreSQL transaction semantics.",
 )
-def test_concurrent_first_requests_collapse_to_one_submission(
-    client: TestClient,
-    monkeypatch,
-) -> None:  # type: ignore[no-untyped-def]
+def test_concurrent_first_requests_collapse_to_one_submission(monkeypatch) -> None:  # type: ignore[no-untyped-def]
     barrier = Barrier(2)
     original_check = submission_routes.checker.check
 
@@ -141,11 +139,15 @@ def test_concurrent_first_requests_collapse_to_one_submission(
         barrier.wait(timeout=10)
         return original_check(context)
 
+    def concurrent_upload():  # type: ignore[no-untyped-def]
+        with TestClient(app) as thread_client:
+            return upload(thread_client)
+
     monkeypatch.setattr(submission_routes.checker, "check", synchronised_check)
     before = set(settings.quarantine_dir.iterdir())
 
     with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [executor.submit(upload, client) for _ in range(2)]
+        futures = [executor.submit(concurrent_upload) for _ in range(2)]
         responses = [future.result(timeout=20) for future in futures]
 
     assert [response.status_code for response in responses] == [201, 201]
