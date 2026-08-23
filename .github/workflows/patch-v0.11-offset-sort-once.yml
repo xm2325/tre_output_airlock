@@ -1,0 +1,39 @@
+name: Patch v0.11 offset sort once
+
+on:
+  push:
+    branches: [cursor-pagination-v0.11]
+    paths:
+      - ".github/workflows/patch-v0.11-offset-sort-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor-pagination-v0.11
+      - name: Add stable tie-breakers to legacy offset pagination
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/app/api/submission_routes.py")
+          text = path.read_text()
+          old = '''    if sort == "oldest":\n        statement = statement.order_by(asc(Submission.created_at))\n    elif sort == "risk_desc":\n        statement = statement.order_by(desc(Submission.risk_score), asc(Submission.created_at))\n    else:\n        statement = statement.order_by(desc(Submission.created_at))\n'''
+          new = '''    if sort == "oldest":\n        statement = statement.order_by(asc(Submission.created_at), asc(Submission.id))\n    elif sort == "risk_desc":\n        statement = statement.order_by(\n            desc(Submission.risk_score), asc(Submission.created_at), asc(Submission.id)\n        )\n    else:\n        statement = statement.order_by(desc(Submission.created_at), desc(Submission.id))\n'''
+          if old not in text:
+              raise SystemExit("legacy offset sort anchor not found")
+          path.write_text(text.replace(old, new, 1))
+          PY
+          git diff --check
+      - name: Commit stable ordering
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/api/submission_routes.py
+          git commit -m "feat: stabilise legacy submission ordering"
+          git push origin HEAD:cursor-pagination-v0.11
