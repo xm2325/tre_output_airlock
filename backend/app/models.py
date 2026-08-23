@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.policy import POLICY_VERSION, RULE_BY_CODE, risk_band
@@ -40,6 +40,16 @@ class Submission(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utcnow, onupdate=utcnow
+    )
+
+    __table_args__ = (
+        Index("ix_submissions_created_id", created_at, id),
+        Index(
+            "ix_submissions_risk_cursor",
+            risk_score.desc(),
+            created_at.asc(),
+            id.asc(),
+        ),
     )
 
     findings: Mapped[list[Finding]] = relationship(
