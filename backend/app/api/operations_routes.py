@@ -22,6 +22,7 @@ from fastapi import (
 )
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import and_, asc, desc, func, or_, select, text, update
+from sqlalchemy.exc import TimeoutError as SqlAlchemyTimeoutError
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -77,6 +78,10 @@ def readiness(db: Session = Depends(get_db)) -> ReadinessOut:
         probe = settings.quarantine_dir / ".readiness-probe"
         probe.write_text("ok", encoding="utf-8")
         probe.unlink(missing_ok=True)
+    except SqlAlchemyTimeoutError as exc:
+        telemetry.record_database_pool_checkout_timeout()
+        logger.warning("Readiness check failed because the database pool is exhausted")
+        raise HTTPException(status_code=503, detail="Service dependencies are not ready.") from exc
     except Exception as exc:
         logger.exception("Readiness check failed")
         raise HTTPException(status_code=503, detail="Service dependencies are not ready.") from exc

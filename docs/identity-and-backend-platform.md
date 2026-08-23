@@ -93,7 +93,18 @@ The pool is a **per-task budget**. With the reference defaults, one API task can
 
 The AWS backend workflow starts PostgreSQL 16, applies the Alembic migration and runs all 70 backend tests against PostgreSQL. Its pool contract deliberately uses `pool_size=3`, `max_overflow=2`, a 0.2-second checkout timeout and a 300-second recycle interval. The PostgreSQL-only test checks that the configured QueuePool has the expected size and timeout, opens all five permitted connections, verifies that a sixth checkout raises SQLAlchemy `TimeoutError`, closes the held connections, confirms the checked-out count returns to zero and then executes `SELECT 1` through a fresh connection. This proves bounded exhaustion and recovery behavior against PostgreSQL rather than only testing configuration parsing.
 
-The standard SQLite coverage job collects the same 70 tests; the PostgreSQL-only pool test is skipped there, producing 69 passed / 1 skipped with 91.80% coverage. The dedicated PostgreSQL path runs 70/70.
+The standard SQLite coverage job now collects 71 tests; the PostgreSQL-only saturation contract is skipped there, producing 70 passed / 1 skipped with 91.07% coverage. The dedicated PostgreSQL path also collects 71 tests, with 70 passed / 1 SQLite-only skipped.
+
+## Database pool observability
+
+The existing `/metrics` endpoint exposes live **per-process** PostgreSQL QueuePool state: configured persistent size, maximum overflow, total capacity, checked-out and checked-in connections, open overflow connections, remaining checkout capacity and a utilisation ratio. It also exposes a cumulative checkout-timeout counter. SQLite deliberately emits none of these PostgreSQL/RDS pool gauges.
+
+When a normal database-backed API request cannot obtain a connection before `pool_timeout`, the service translates SQLAlchemy `TimeoutError` into HTTP 503 with an explicit temporary database-capacity message instead of reporting an internal 500. The readiness path retains its dependency-unavailable 503 contract and records the same pool-timeout counter when exhaustion is the cause.
+
+The PostgreSQL 16 CI contract fills all five configured `3 + 2` connections, verifies metrics report checked-out capacity of five, zero remaining capacity, utilisation `1.0` and two open overflow connections, then exercises both `/ready` and a database-backed API while saturated. Both return 503 and the timeout counter increases by two. After the held connections are released, the contract verifies checked-out returns to zero, full capacity is available, utilisation returns to `0.0`, readiness returns 200 and a fresh `SELECT 1` succeeds.
+
+These gauges describe one API process. They are not aggregate ECS-service or RDS-instance metrics; production operations still need service-level aggregation, RDS/CloudWatch metrics, dashboards and alert thresholds.
+
 
 ## Review transaction boundary
 
