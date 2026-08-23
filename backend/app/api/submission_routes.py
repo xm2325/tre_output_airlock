@@ -27,12 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.api.common import (
-    _apply_automated_result,
-    _duplicate_finding,
-    _get_submission,
-    _request_id,
-)
+from app.api.common import _get_submission, _request_id
 from app.core.auth import Actor, get_actor, require_roles
 from app.core.config import settings
 from app.core.http_preconditions import submission_etag
@@ -66,6 +61,11 @@ from app.schemas import (
 )
 from app.services.audit import append_audit_event, verify_audit_chain
 from app.services.checker import ACTION_PRIORITY, OutputChecker, decision_from_findings
+from app.services.scanning import (
+    ScanAuditContract,
+    ScanInputUnavailable,
+    run_submission_scan,
+)
 from app.services.reports import build_report, verify_report
 from app.services.storage import FileTooLargeError, quarantined_path, store_quarantined_file
 
@@ -184,36 +184,12 @@ async def create_submission(
             f"File stored in quarantine; size_bytes={stored.size_bytes}; sha256_recorded=true.",
             _request_id(request),
         )
-        submission.status = "SCANNING"
-        append_audit_event(
+        run_submission_scan(
+            db,
             submission,
-            "SCAN_STARTED",
-            "rule-engine",
-            f"Policy={POLICY_VERSION}; deterministic checks started.",
-            _request_id(request),
-        )
-
-        context = FileContext(
+            checker=checker,
+            request_id=_request_id(request),
             path=stored.path,
-            filename=safe_filename,
-            content_type=submission.content_type,
-            size_bytes=stored.size_bytes,
-        )
-        result = checker.check(context)
-        findings = list(result.findings)
-        duplicate = _duplicate_finding(db, submission_id, stored.sha256)
-        if duplicate is not None:
-            findings.append(duplicate)
-        _apply_automated_result(submission, findings, result.policy_version)
-        append_audit_event(
-            submission,
-            "AUTOMATED_CHECK_COMPLETED",
-            "rule-engine",
-            (
-                f"Policy={submission.policy_version}; decision={submission.automated_decision}; "
-                f"risk_score={submission.risk_score:.3f}; findings={len(findings)}."
-            ),
-            _request_id(request),
         )
         db.add(submission)
         db.flush()
@@ -355,41 +331,20 @@ def recheck_submission(
     db: Session = Depends(get_db),
 ) -> Submission:
     submission = _get_submission(db, submission_id, actor)
-    path = quarantined_path(submission.id, submission.filename)
-    if submission.file_deleted_at is not None or not path.exists():
-        raise HTTPException(status_code=409, detail="Quarantined file is no longer available.")
-
-    submission.status = "SCANNING"
-    submission.claimed_by = None
-    submission.claimed_at = None
-    append_audit_event(
-        submission, "RECHECK_STARTED", actor.name, f"Policy={POLICY_VERSION}.", _request_id(request)
-    )
-    result = checker.check(
-        FileContext(
-            path=path,
-            filename=submission.filename,
-            content_type=submission.content_type,
-            size_bytes=submission.size_bytes,
+    try:
+        run_submission_scan(
+            db,
+            submission,
+            checker=checker,
+            request_id=_request_id(request),
+            audit=ScanAuditContract(
+                started_event="RECHECK_STARTED",
+                started_actor=actor.name,
+                completed_event="AUTOMATED_RECHECK_COMPLETED",
+            ),
         )
-    )
-    findings = list(result.findings)
-    duplicate = _duplicate_finding(db, submission.id, submission.sha256)
-    if duplicate is not None:
-        findings.append(duplicate)
-    _apply_automated_result(submission, findings, result.policy_version)
-    append_audit_event(
-        submission,
-        "AUTOMATED_RECHECK_COMPLETED",
-        "rule-engine",
-        (
-            f"Policy={submission.policy_version}; "
-            f"decision={submission.automated_decision}; "
-            f"risk_score={submission.risk_score:.3f}; "
-            f"findings={len(findings)}."
-        ),
-        _request_id(request),
-    )
+    except ScanInputUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     db.commit()
     return _get_submission(db, submission.id, actor)
 
