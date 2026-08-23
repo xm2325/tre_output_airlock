@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import math
 import os
 from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
@@ -92,7 +93,7 @@ def _parse_float_setting(name: str, default: str, *, minimum: float, maximum: fl
         value = float(raw)
     except ValueError as exc:
         raise ValueError(f"{name} must be numeric") from exc
-    if value < minimum or value > maximum:
+    if not math.isfinite(value) or value < minimum or value > maximum:
         raise ValueError(f"{name} must be between {minimum:g} and {maximum:g}")
     return value
 
@@ -197,6 +198,8 @@ def _parse_token_expiry(claims: Mapping[str, object]) -> float | None:
             status.HTTP_401_UNAUTHORIZED,
             "Token expiry claim is invalid.",
         ) from exc
+    if not math.isfinite(parsed):
+        raise _http_error(status.HTTP_401_UNAUTHORIZED, "Token expiry claim is invalid.")
     if parsed <= time():
         raise _http_error(status.HTTP_401_UNAUTHORIZED, "Bearer token has expired.")
     return parsed
