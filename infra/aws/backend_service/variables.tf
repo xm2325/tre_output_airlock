@@ -91,6 +91,28 @@ variable "oidc_expected_issuer" {
   type        = string
 }
 
+variable "oidc_cache_ttl_seconds" {
+  description = "Short successful-introspection cache TTL. Zero disables caching; values above 60 are rejected by the application."
+  type        = number
+  default     = 15
+
+  validation {
+    condition     = var.oidc_cache_ttl_seconds >= 0 && var.oidc_cache_ttl_seconds <= 60
+    error_message = "OIDC cache TTL must be between 0 and 60 seconds."
+  }
+}
+
+variable "oidc_cache_max_entries" {
+  description = "Per-task maximum number of successful token introspection entries retained in the LRU cache."
+  type        = number
+  default     = 2048
+
+  validation {
+    condition     = var.oidc_cache_max_entries >= 1 && var.oidc_cache_max_entries <= 10000
+    error_message = "OIDC cache capacity must be between 1 and 10000 entries."
+  }
+}
+
 variable "report_signing_secret_arn" {
   description = "Secrets Manager ARN containing the HMAC decision-report signing secret."
   type        = string
