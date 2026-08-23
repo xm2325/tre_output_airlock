@@ -1,0 +1,199 @@
+name: Patch v0.11 cursor route once
+
+on:
+  push:
+    branches: [cursor-pagination-v0.11]
+    paths:
+      - ".github/workflows/patch-v0.11-cursor-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: cursor-pagination-v0.11
+      - name: Add cursor response schema and route
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          schemas = Path("backend/app/schemas.py")
+          text = schemas.read_text()
+          anchor = '''class SubmissionPage(BaseModel):\n    items: list[SubmissionSummary]\n    page: int\n    page_size: int\n    total: int\n    pages: int\n\n\n'''
+          replacement = anchor + '''class SubmissionCursorPage(BaseModel):\n    items: list[SubmissionSummary]\n    limit: int\n    has_more: bool\n    next_cursor: str | None\n\n\n'''
+          if anchor not in text:
+              raise SystemExit("SubmissionPage schema anchor not found")
+          schemas.write_text(text.replace(anchor, replacement, 1))
+
+          routes = Path("backend/app/api/submission_routes.py")
+          text = routes.read_text()
+          import_anchor = "from app.core.telemetry import telemetry\n"
+          import_replacement = '''from app.core.cursor_pagination import (\n    SubmissionCursor,\n    cursor_contract,\n    decode_submission_cursor,\n    encode_submission_cursor,\n)\n''' + import_anchor
+          if import_anchor not in text:
+              raise SystemExit("telemetry import anchor not found")
+          text = text.replace(import_anchor, import_replacement, 1)
+
+          schema_anchor = "    SubmissionDetail,\n    SubmissionPage,\n"
+          schema_replacement = "    SubmissionCursorPage,\n    SubmissionDetail,\n    SubmissionPage,\n"
+          if schema_anchor not in text:
+              raise SystemExit("submission schema import anchor not found")
+          text = text.replace(schema_anchor, schema_replacement, 1)
+
+          old_sort = '''    if sort == "oldest":\n        statement = statement.order_by(asc(Submission.created_at))\n    elif sort == "risk_desc":\n        statement = statement.order_by(desc(Submission.risk_score), asc(Submission.created_at))\n    else:\n        statement = statement.order_by(desc(Submission.created_at))\n'''
+          new_sort = '''    if sort == "oldest":\n        statement = statement.order_by(asc(Submission.created_at), asc(Submission.id))\n    elif sort == "risk_desc":\n        statement = statement.order_by(\n            desc(Submission.risk_score), asc(Submission.created_at), asc(Submission.id)\n        )\n    else:\n        statement = statement.order_by(desc(Submission.created_at), desc(Submission.id))\n'''
+          if old_sort not in text:
+              raise SystemExit("offset sort anchor not found")
+          text = text.replace(old_sort, new_sort, 1)
+
+          dynamic_anchor = '''@router.get(\n    "/api/v1/submissions/{submission_id}",\n    response_model=SubmissionDetail,\n    tags=["submissions"],\n)\n'''
+          cursor_route = r'''@router.get(
+    "/api/v1/submissions/cursor",
+    response_model=SubmissionCursorPage,
+    tags=["submissions"],
+)
+def list_submissions_cursor(
+    limit: int = Query(default=25, ge=1, le=100),
+    cursor: str | None = Query(default=None, min_length=16, max_length=2048),
+    decision: Literal["ALLOW", "REVIEW", "BLOCK"] | None = Query(default=None),
+    workflow_status: Literal["AWAITING_REVIEW", "COMPLETED", "QUARANTINED", "SCANNING"]
+    | None = Query(default=None),
+    project_code: str | None = Query(default=None, max_length=80),
+    search: str | None = Query(default=None, max_length=120),
+    sort: Literal["newest", "oldest", "risk_desc"] = Query(default="newest"),
+    actor: Actor = Depends(get_actor),
+    db: Session = Depends(get_db),
+) -> SubmissionCursorPage:
+    """List submissions with signed keyset pagination.
+
+    The cursor is bound to the authenticated actor, filters and sort contract. The
+    existing page/offset endpoint remains available for the browser demo.
+    """
+    conditions: list[ColumnElement[bool]] = []
+    if actor.role == "researcher":
+        conditions.append(Submission.submitted_by == actor.name)
+    if decision is not None:
+        conditions.append(Submission.automated_decision == decision)
+    if workflow_status is not None:
+        conditions.append(Submission.status == workflow_status)
+    if project_code and project_code.strip():
+        conditions.append(Submission.project_code == project_code.strip())
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        conditions.append(
+            or_(
+                Submission.filename.ilike(term),
+                Submission.submitted_by.ilike(term),
+                Submission.project_code.ilike(term),
+                Submission.output_description.ilike(term),
+            )
+        )
+
+    contract = cursor_contract(
+        actor_role=actor.role,
+        actor_name=actor.name,
+        decision=decision,
+        workflow_status=workflow_status,
+        project_code=project_code,
+        search=search,
+        sort=sort,
+    )
+    anchor = None
+    if cursor is not None:
+        try:
+            anchor = decode_submission_cursor(
+                cursor, expected_contract=contract, expected_sort=sort
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    statement = select(Submission)
+    if conditions:
+        statement = statement.where(*conditions)
+
+    if sort == "oldest":
+        if anchor is not None:
+            statement = statement.where(
+                or_(
+                    Submission.created_at > anchor.created_at,
+                    and_(
+                        Submission.created_at == anchor.created_at,
+                        Submission.id > anchor.submission_id,
+                    ),
+                )
+            )
+        statement = statement.order_by(asc(Submission.created_at), asc(Submission.id))
+    elif sort == "risk_desc":
+        if anchor is not None:
+            assert anchor.risk_score is not None
+            statement = statement.where(
+                or_(
+                    Submission.risk_score < anchor.risk_score,
+                    and_(
+                        Submission.risk_score == anchor.risk_score,
+                        Submission.created_at > anchor.created_at,
+                    ),
+                    and_(
+                        Submission.risk_score == anchor.risk_score,
+                        Submission.created_at == anchor.created_at,
+                        Submission.id > anchor.submission_id,
+                    ),
+                )
+            )
+        statement = statement.order_by(
+            desc(Submission.risk_score), asc(Submission.created_at), asc(Submission.id)
+        )
+    else:
+        if anchor is not None:
+            statement = statement.where(
+                or_(
+                    Submission.created_at < anchor.created_at,
+                    and_(
+                        Submission.created_at == anchor.created_at,
+                        Submission.id < anchor.submission_id,
+                    ),
+                )
+            )
+        statement = statement.order_by(desc(Submission.created_at), desc(Submission.id))
+
+    rows = list(db.scalars(statement.limit(limit + 1)))
+    has_more = len(rows) > limit
+    items = rows[:limit]
+    next_cursor = None
+    if has_more and items:
+        last = items[-1]
+        next_cursor = encode_submission_cursor(
+            SubmissionCursor(
+                sort=sort,
+                contract=contract,
+                created_at=last.created_at,
+                submission_id=last.id,
+                risk_score=last.risk_score if sort == "risk_desc" else None,
+            )
+        )
+
+    return SubmissionCursorPage(
+        items=[SubmissionSummary.model_validate(item) for item in items],
+        limit=limit,
+        has_more=has_more,
+        next_cursor=next_cursor,
+    )
+
+'''
+          if dynamic_anchor not in text:
+              raise SystemExit("dynamic submission route anchor not found")
+          text = text.replace(dynamic_anchor, cursor_route + dynamic_anchor, 1)
+          routes.write_text(text)
+          PY
+          git diff --check
+      - name: Commit route patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/schemas.py backend/app/api/submission_routes.py
+          git diff --cached --quiet && exit 0
+          git commit -m "feat: add signed keyset submissions endpoint"
+          git push origin HEAD:cursor-pagination-v0.11
