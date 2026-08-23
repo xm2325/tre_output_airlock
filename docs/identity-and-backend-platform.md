@@ -78,7 +78,22 @@ AIRLOCK_DATABASE_PASSWORD
 
 The builder validates required fields and port range and URL-escapes credentials before constructing the `postgresql+psycopg` DSN.
 
-The AWS backend workflow also starts PostgreSQL 16, applies the Alembic migration to that database and runs the backend test suite against PostgreSQL. This tests SQL, transaction, timestamp and optimistic-concurrency behavior against the same database family used by the RDS reference design rather than relying only on SQLite tests.
+PostgreSQL engines also use an explicit, bounded per-process SQLAlchemy connection-pool contract:
+
+```text
+AIRLOCK_DATABASE_POOL_SIZE=5
+AIRLOCK_DATABASE_MAX_OVERFLOW=5
+AIRLOCK_DATABASE_POOL_TIMEOUT_SECONDS=5.0
+AIRLOCK_DATABASE_POOL_RECYCLE_SECONDS=900
+```
+
+`pool_pre_ping` remains enabled. Persistent pool size is constrained to 1–20 connections, overflow to 0–20, checkout timeout to 0.1–30 seconds and recycle age to 30–3,600 seconds. Numeric configuration fails closed, including non-finite timeout values. SQLite does not consume these QueuePool settings, so an invalid PostgreSQL pool environment value does not alter the local SQLite path.
+
+The pool is a **per-task budget**. With the reference defaults, one API task can hold up to 10 application connections. If ECS runs two tasks, the service can therefore attempt roughly 20 application connections before accounting for migrations, administration, monitoring, failover and any other RDS users. These defaults are demonstration/reference values, not a claim that 10 connections per task is appropriate for a particular production database.
+
+The AWS backend workflow starts PostgreSQL 16, applies the Alembic migration and runs all 70 backend tests against PostgreSQL. Its pool contract deliberately uses `pool_size=3`, `max_overflow=2`, a 0.2-second checkout timeout and a 300-second recycle interval. The PostgreSQL-only test checks that the configured QueuePool has the expected size and timeout, opens all five permitted connections, verifies that a sixth checkout raises SQLAlchemy `TimeoutError`, closes the held connections, confirms the checked-out count returns to zero and then executes `SELECT 1` through a fresh connection. This proves bounded exhaustion and recovery behavior against PostgreSQL rather than only testing configuration parsing.
+
+The standard SQLite coverage job collects the same 70 tests; the PostgreSQL-only pool test is skipped there, producing 69 passed / 1 skipped with 91.80% coverage. The dedicated PostgreSQL path runs 70/70.
 
 ## Review transaction boundary
 
@@ -114,10 +129,12 @@ API Gateway HTTP API
 
 Runtime credentials and signing material come from Secrets Manager. The ECS execution role can read only the declared secret resources in the module. The application task role has no AWS control-plane permissions because the current FastAPI process does not call AWS APIs directly.
 
+The Terraform reference passes the bounded database pool size, overflow, checkout timeout and recycle age into each ECS task alongside the RDS endpoint configuration. Production sizing must compare `desired_count * (pool_size + max_overflow)` with the actual RDS connection limit and leave explicit headroom for non-service connections and scaling/failover behavior.
+
 CloudWatch receives container logs. `/ready` checks database access and writable working storage and is used for ECS and target-group health checks. API Gateway applies a basic request-rate limit in the reference module.
 
 ## Validation boundary
 
-The dedicated workflow runs Ruff, strict MyPy, backend tests with the 90% coverage threshold, a PostgreSQL 16 migration-and-test contract, shell syntax validation for the container entrypoint, `terraform fmt -check`, `terraform init -backend=false` and `terraform validate`.
+The dedicated workflow runs Ruff, strict MyPy, backend tests with the 90% coverage threshold, a PostgreSQL 16 migration-and-test contract including bounded pool exhaustion/recovery, shell syntax validation for the container entrypoint, `terraform fmt -check`, `terraform init -backend=false` and `terraform validate`.
 
-Passing these checks supports claims about tested Python/PostgreSQL behavior and statically validated Terraform. The OIDC tests use a simulated IdP boundary, including the threaded single-flight cases. These checks do **not** support a claim that the AWS stack has been applied, that a real IdP integration has been operated, or that single-flight coordination spans multiple service tasks.
+Passing these checks supports claims about tested Python/PostgreSQL behavior, explicit per-task database connection budgets and statically validated Terraform. The OIDC tests use a simulated IdP boundary, including the threaded single-flight cases. These checks do **not** support a claim that the AWS stack has been applied, that the reference pool values have been calibrated against a real RDS instance, that a real IdP integration has been operated, or that single-flight coordination spans multiple service tasks.

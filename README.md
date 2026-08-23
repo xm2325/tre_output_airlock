@@ -55,7 +55,7 @@ flowchart LR
 | Identity and authorisation | OAuth2/OIDC token introspection with issuer/audience/expiry checks, configurable IdP group-to-RBAC mapping, explicit 401/403/503 paths, and a bounded short-lived successful-introspection cache |
 | Identity resilience | 15-second default cache TTL capped by token `exp`, HMAC-SHA256 token/config digests, bounded LRU eviction, failure non-caching, per-token single-flight protection and IdP latency/cache telemetry |
 | Concurrency and workflow safety | Optimistic `row_version` compare-and-swap, transactional claim + audit persistence, 30-minute review-claim leases, expired-claim recovery and idempotent submission handling |
-| PostgreSQL / RDS | PostgreSQL-backed local stack, RDS-style configuration, one-off migration contract for multi-task deployment, and PostgreSQL 16 CI that applies Alembic then runs the full backend suite |
+| PostgreSQL / RDS | PostgreSQL-backed local stack, RDS-style configuration, explicit bounded per-task SQLAlchemy pool sizing/timeouts/recycling, one-off migration contract, and PostgreSQL 16 CI that exercises pool exhaustion and recovery |
 | AWS backend service | Terraform for API Gateway, private ALB, ECS Fargate, RDS PostgreSQL, encrypted EFS, Secrets Manager, CloudWatch and constrained IAM roles; format/init/validate run in GitHub Actions |
 | ETL/ELT pipelines | FHIR, genomic manifest and VCF ingestion with stable run IDs and atomic publication |
 | Clinical and genomic data | Patient, condition, observation, specimen and genomic sample linkage |
@@ -126,7 +126,7 @@ API Gateway HTTP API
          -> OAuth2/OIDC token introspection over HTTPS
 ```
 
-Runtime database credentials, the IdP client secret and report-signing material are injected through Secrets Manager. The service task has no public IP. The application task role intentionally has no AWS control-plane permissions because the current FastAPI process does not call AWS APIs directly. The ECS reference also passes the bounded OIDC cache TTL/capacity settings to each task. See [`infra/aws/backend_service/README.md`](infra/aws/backend_service/README.md) and [`docs/identity-and-backend-platform.md`](docs/identity-and-backend-platform.md).
+Runtime database credentials, the IdP client secret and report-signing material are injected through Secrets Manager. The service task has no public IP. The application task role intentionally has no AWS control-plane permissions because the current FastAPI process does not call AWS APIs directly. The ECS reference passes both the bounded OIDC cache settings and the PostgreSQL pool budget to each task. The default application budget is 5 persistent connections plus 5 overflow connections per task; production sizing must account for task count and database headroom. See [`infra/aws/backend_service/README.md`](infra/aws/backend_service/README.md) and [`docs/identity-and-backend-platform.md`](docs/identity-and-backend-platform.md).
 
 ## Browser-only Airlock demo
 
@@ -207,7 +207,7 @@ The clinical–genomic workflow checks:
 
 The current Airlock backend contract checks:
 
-- **61 backend tests** with **91.88% coverage** against a 90% gate;
+- **70 backend tests collected**: **69 passed + 1 PostgreSQL-only skipped** on the standard backend job with **91.80% coverage** against a 90% gate;
 - Ruff and strict MyPy;
 - Python dependency audit;
 - cross-stack release-version consistency across runtime/package/lock metadata;
@@ -220,7 +220,7 @@ The current Airlock backend contract checks:
 - Docker Compose configuration and full-stack route verification;
 - final container build.
 
-The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies the real Alembic migration and runs the full backend suite against PostgreSQL. It also checks Terraform format, `init -backend=false` and `validate`. These checks validate code and configuration; they do not demonstrate a live AWS or real IdP deployment.
+The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies the real Alembic migration and runs **70/70 backend tests** against PostgreSQL. Its pool contract uses 3 persistent + 2 overflow connections, occupies all five, verifies a sixth checkout fails at the configured 0.2-second timeout, releases them, then reconnects and executes `SELECT 1`. It also checks Terraform format, `init -backend=false` and `validate`. These checks validate code and configuration; they do not demonstrate a live AWS or real IdP deployment.
 
 ## Repository structure
 
@@ -241,7 +241,7 @@ docs/adr/                               Architecture decision records
 
 ## Production boundary
 
-Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing the project as production-ready. The AWS backend path is a statically validated reference deployment and the OIDC tests mock the identity-provider network boundary. A successfully introspected token can remain accepted until the deliberately short cache TTL expires if it is revoked immediately after introspection; deployments requiring immediate revocation can disable the resident cache. Single-flight coordination is per API process, so separate ECS tasks can each perform one introspection for the same cold token. A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, malware scanning, formal privacy/security review and representative source-system validation.
+Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing the project as production-ready. The AWS backend path is a statically validated reference deployment and the OIDC tests mock the identity-provider network boundary. A successfully introspected token can remain accepted until the deliberately short cache TTL expires if it is revoked immediately after introspection; deployments requiring immediate revocation can disable the resident cache. Single-flight coordination is per API process, so separate ECS tasks can each perform one introspection for the same cold token. A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, pool sizing against the deployed RDS `max_connections` and ECS task count with migration/administration/failover headroom, malware scanning, formal privacy/security review and representative source-system validation.
 
 ## Author
 
