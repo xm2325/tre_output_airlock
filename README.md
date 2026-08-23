@@ -54,7 +54,7 @@ flowchart LR
 | Backend Python / REST | FastAPI service, typed schemas, OpenAPI export, bounded signed keyset cursor pagination with deterministic tie-breakers, PostgreSQL/SQLAlchemy and Alembic migrations |
 | Identity and authorisation | OAuth2/OIDC token introspection with issuer/audience/expiry checks, configurable IdP group-to-RBAC mapping, explicit 401/403/503 paths, and a bounded short-lived successful-introspection cache |
 | Identity resilience | 15-second default cache TTL capped by token `exp`, HMAC-SHA256 token/config digests, bounded LRU eviction, failure non-caching, per-token single-flight protection and IdP latency/cache telemetry |
-| Concurrency and workflow safety | Optimistic `row_version` compare-and-swap, transactional claim + audit persistence, 30-minute review-claim leases, expired-claim recovery and idempotent submission handling |
+| Concurrency and workflow safety | Strong submission ETags and `If-Match`, database `row_version` compare-and-swap for claims and final review decisions, transactional audit persistence, 30-minute review-claim leases, expired-claim recovery and legacy version compatibility |
 | PostgreSQL / RDS | PostgreSQL-backed local stack, bounded pool controls and telemetry, explicit 503 checkout-timeout handling, keyset composite indexes, and PostgreSQL 16 migration/exhaustion/query-plan contracts |
 | AWS backend service | Terraform for API Gateway, private ALB, ECS Fargate, RDS PostgreSQL, encrypted EFS, Secrets Manager, CloudWatch and constrained IAM roles; format/init/validate run in GitHub Actions |
 | ETL/ELT pipelines | FHIR, genomic manifest and VCF ingestion with stable run IDs and atomic publication |
@@ -99,7 +99,8 @@ The Airlock includes:
 - owner filtering and risk-prioritised review queues;
 - transactional review-claim and hash-linked audit persistence;
 - configurable review-claim leases with safe expired-claim reassignment;
-- optimistic concurrency based on `row_version`;
+- strong submission ETags derived from id + `row_version`, with standard `If-Match` preconditions for manual review while retaining the legacy body `expected_version` path;
+- database compare-and-swap for final review decisions so stale concurrent writes cannot pass an earlier in-memory version check;
 - signed actor/filter/sort-bound keyset cursor pagination for submission listing, while retaining the existing bounded page/offset API for browser compatibility;
 - OAuth2/OIDC token-introspection identity with configurable IdP group-to-role mapping;
 - bounded short-lived successful-introspection caching with token-expiry capping and LRU eviction;
@@ -208,7 +209,7 @@ The clinical–genomic workflow checks:
 
 The current Airlock backend contract checks:
 
-- **78 backend tests collected**: **77 passed + 1 PostgreSQL-only skipped** on the standard SQLite backend job with **91.22% coverage** against a 90% gate;
+- **86 backend tests collected**: **85 passed + 1 PostgreSQL-only skipped** on the standard SQLite backend job with **90.62% coverage** against a 90% gate;
 - Ruff and strict MyPy;
 - Python dependency audit;
 - cross-stack release-version consistency across runtime/package/lock metadata;
@@ -217,13 +218,14 @@ The current Airlock backend contract checks:
 - OAuth2/OIDC cache, expiry, failure and numeric-configuration regression paths;
 - threaded OIDC single-flight regression paths: eight same-token concurrent calls collapse to one simulated upstream call, different tokens can reach the simulated IdP concurrently, shared failures are not cached, and TTL-zero mode coalesces only in-flight work;
 - transactional review-claim rollback and expired-lease recovery;
+- HTTP optimistic-concurrency regression paths covering current ETag publication, `If-Match`-only review, stale-header **412**, missing-precondition **428**, contradictory header/body **400**, weak/wildcard rejection, database CAS stale-write rejection and rollback of the decision when audit persistence fails;
 - signed cursor regression paths covering three stable sort orders, equal-key tie-breaks, no duplicate/gap traversal, actor/filter binding, tamper rejection and bounded page size;
 - PostgreSQL query-plan evidence that seeds 20,000 synthetic submissions, runs `ANALYZE`, and requires default-planner `EXPLAIN (FORMAT JSON)` plans for deep `newest` and `risk_desc` keyset queries to reference their corresponding composite cursor indexes;
 - frontend dependency audit, typecheck, unit tests and build;
 - Docker Compose configuration and full-stack route verification;
 - final container build.
 
-The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies Alembic through **`0002(head)`**, verifies both cursor-pagination composite indexes in `pg_indexes`, and collects the same **78 tests**, with **77 passed + 1 SQLite-only skipped**. It also seeds **20,000 synthetic submissions**, runs `ANALYZE`, and checks default-planner `EXPLAIN (FORMAT JSON)` output for deep keyset queries: `newest` must use `ix_submissions_created_id` and `risk_desc` must use `ix_submissions_risk_cursor`. The complete plan JSON is retained as a CI artifact. Its pool contract still uses 3 persistent + 2 overflow connections and verifies saturation, explicit 503 behavior and recovery. Terraform format, `init -backend=false` and `validate` also run. These checks validate code, configuration and planner/index selection under the CI fixture; they do not demonstrate production latency, throughput, a live AWS deployment or a real IdP integration.
+The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies Alembic through **`0002(head)`**, verifies both cursor-pagination composite indexes in `pg_indexes`, and collects the same **86 tests**, with **85 passed + 1 SQLite-only skipped**. It also seeds **20,000 synthetic submissions**, runs `ANALYZE`, and checks default-planner `EXPLAIN (FORMAT JSON)` output for deep keyset queries: `newest` must use `ix_submissions_created_id` and `risk_desc` must use `ix_submissions_risk_cursor`. The complete plan JSON is retained as a CI artifact. Its pool contract still uses 3 persistent + 2 overflow connections and verifies saturation, explicit 503 behavior and recovery. Terraform format, `init -backend=false` and `validate` also run. These checks validate code, configuration and planner/index selection under the CI fixture; they do not demonstrate production latency, throughput, a live AWS deployment or a real IdP integration.
 
 ## Repository structure
 
@@ -244,7 +246,7 @@ docs/adr/                               Architecture decision records
 
 ## Production boundary
 
-Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing the project as production-ready. The AWS backend path is a statically validated reference deployment and the OIDC tests mock the identity-provider network boundary. A successfully introspected token can remain accepted until the deliberately short cache TTL expires if it is revoked immediately after introspection; deployments requiring immediate revocation can disable the resident cache. Single-flight coordination is per API process, so separate ECS tasks can each perform one introspection for the same cold token. Keyset cursors are stateless and designed to avoid deep `OFFSET` scans. PostgreSQL CI confirms the intended composite indexes are selected by the default planner for a 20,000-row synthetic fixture, but that is query-plan evidence rather than a production performance benchmark. They also do not provide snapshot isolation: concurrent submissions or rechecks that change a mutable sort key such as `risk_score` can move records between traversal steps. A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, pool sizing against the deployed RDS `max_connections` and ECS task count with migration/administration/failover headroom, malware scanning, formal privacy/security review and representative source-system validation.
+Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing the project as production-ready. The AWS backend path is a statically validated reference deployment and the OIDC tests mock the identity-provider network boundary. A successfully introspected token can remain accepted until the deliberately short cache TTL expires if it is revoked immediately after introspection; deployments requiring immediate revocation can disable the resident cache. Single-flight coordination is per API process, so separate ECS tasks can each perform one introspection for the same cold token. Keyset cursors are stateless and designed to avoid deep `OFFSET` scans. PostgreSQL CI confirms the intended composite indexes are selected by the default planner for a 20,000-row synthetic fixture, but that is query-plan evidence rather than a production performance benchmark. They also do not provide snapshot isolation: concurrent submissions or rechecks that change a mutable sort key such as `risk_score` can move records between traversal steps. Submission ETags likewise represent the current mutable row version for conditional writes; they are not database locks, snapshot tokens or cross-request transactions. A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, pool sizing against the deployed RDS `max_connections` and ECS task count with migration/administration/failover headroom, malware scanning, formal privacy/security review and representative source-system validation.
 
 ## Author
 
