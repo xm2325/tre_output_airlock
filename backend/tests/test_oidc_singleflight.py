@@ -130,7 +130,9 @@ def test_different_tokens_are_not_serialised_by_singleflight_lock(monkeypatch) -
         try:
             upstream_barrier.wait(timeout=2.0)
         except BrokenBarrierError as exc:
-            raise AssertionError("different tokens were serialised before reaching the IdP") from exc
+            raise AssertionError(
+                "different tokens were serialised before reaching the IdP"
+            ) from exc
         return FakeResponse(active_claims(subject=f"subject-{token}"))
 
     monkeypatch.setattr(auth, "urlopen", fake_urlopen)
