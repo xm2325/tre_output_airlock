@@ -1,0 +1,113 @@
+name: Prepare v0.13 release once
+
+on:
+  push:
+    branches: [http-preconditions-v0.13]
+    paths:
+      - ".github/workflows/prepare-v0.13-release-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: http-preconditions-v0.13
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Promote source metadata to 0.13.0
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if old not in text:
+                  raise SystemExit(f"Expected anchor missing in {path}: {old!r}")
+              file.write_text(text.replace(old, new, 1))
+
+          version = Path("VERSION")
+          if version.read_text().strip() != "0.12.0":
+              raise SystemExit("VERSION is not the expected 0.12.0 baseline")
+          version.write_text("0.13.0\n")
+          replace_once("backend/app/version.py", '__version__ = "0.12.0"', '__version__ = "0.13.0"')
+          replace_once("backend/pyproject.toml", 'version = "0.12.0"', 'version = "0.13.0"')
+          replace_once("frontend/package.json", '"version": "0.12.0"', '"version": "0.13.0"')
+          PY
+      - name: Refresh generated lock metadata
+        run: |
+          cd backend && uv lock
+          cd ../frontend && npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Update v0.13 engineering evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              file = Path(path)
+              text = file.read_text()
+              if old not in text:
+                  raise SystemExit(f"Expected anchor missing in {path}: {old[:180]!r}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "README.md",
+              "| Concurrency and workflow safety | Optimistic `row_version` compare-and-swap, transactional claim + audit persistence, 30-minute review-claim leases, expired-claim recovery and idempotent submission handling |",
+              "| Concurrency and workflow safety | Strong submission ETags and `If-Match`, database `row_version` compare-and-swap for claims and final review decisions, transactional audit persistence, 30-minute review-claim leases, expired-claim recovery and legacy version compatibility |",
+          )
+          replace_once(
+              "README.md",
+              "- optimistic concurrency based on `row_version`;",
+              "- strong submission ETags derived from id + `row_version`, with standard `If-Match` preconditions for manual review while retaining the legacy body `expected_version` path;\n- database compare-and-swap for final review decisions so stale concurrent writes cannot pass an earlier in-memory version check;",
+          )
+          replace_once(
+              "README.md",
+              "- **78 backend tests collected**: **77 passed + 1 PostgreSQL-only skipped** on the standard SQLite backend job with **91.22% coverage** against a 90% gate;",
+              "- **86 backend tests collected**: **85 passed + 1 PostgreSQL-only skipped** on the standard SQLite backend job with **90.62% coverage** against a 90% gate;",
+          )
+          replace_once(
+              "README.md",
+              "- transactional review-claim rollback and expired-lease recovery;",
+              "- transactional review-claim rollback and expired-lease recovery;\n- HTTP optimistic-concurrency regression paths covering current ETag publication, `If-Match`-only review, stale-header **412**, missing-precondition **428**, contradictory header/body **400**, weak/wildcard rejection, database CAS stale-write rejection and rollback of the decision when audit persistence fails;",
+          )
+          replace_once(
+              "README.md",
+              "and collects the same **78 tests**, with **77 passed + 1 SQLite-only skipped**.",
+              "and collects the same **86 tests**, with **85 passed + 1 SQLite-only skipped**.",
+          )
+          replace_once(
+              "README.md",
+              "They also do not provide snapshot isolation: concurrent submissions or rechecks that change a mutable sort key such as `risk_score` can move records between traversal steps.",
+              "They also do not provide snapshot isolation: concurrent submissions or rechecks that change a mutable sort key such as `risk_score` can move records between traversal steps. Submission ETags likewise represent the current mutable row version for conditional writes; they are not database locks, snapshot tokens or cross-request transactions.",
+          )
+
+          replace_once(
+              "docs/production-readiness.md",
+              "| Review concurrency | compare-and-swap `row_version`, transactional claim/audit write and expiring review-claim lease | representative multi-instance load/concurrency testing and operational tuning of the lease duration |",
+              "| Review concurrency | strong id/version ETags, `If-Match` plus legacy expected-version compatibility, database compare-and-swap for claim and final review writes, transactional decision/audit persistence and expiring review-claim lease | representative multi-instance load/concurrency testing, client retry/precondition UX validation and operational tuning of the lease duration |",
+          )
+          replace_once(
+              "docs/production-readiness.md",
+              "## Submission pagination boundary",
+              "## Review precondition boundary\n\nSubmission detail responses expose a strong ETag derived from the submission identifier and current `row_version`. Manual review accepts that tag through `If-Match`; stale header preconditions return 412, a missing header/body version precondition returns 428, contradictory header/body versions and unsupported weak or wildcard tags return 400, while the legacy stale JSON `expected_version` path retains its existing 409 behavior. The final decision itself is guarded by a database compare-and-swap on id, workflow status and row version, plus the active reviewer claim/lease for non-admin users. The decision transition and hash-linked audit event remain in one transaction, so an audit persistence failure rolls back the decision.\n\nThe ETag is an optimistic-concurrency token for the current mutable submission representation. It is not a database lock, distributed mutex, snapshot-isolation guarantee or frozen export token. A client must fetch the current representation again after a failed precondition and decide whether to retry. Multi-instance contention and retry behavior still require representative load testing.\n\n## Submission pagination boundary",
+          )
+          PY
+          git diff --check
+      - name: Verify release version contract before commit
+        run: python scripts/check_release_version.py
+      - name: Commit generated release evidence
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION backend/app/version.py backend/pyproject.toml backend/uv.lock frontend/package.json frontend/package-lock.json README.md docs/production-readiness.md
+          git diff --cached --quiet && exit 0
+          git commit -m "release: prepare v0.13 HTTP concurrency contract"
+          git push origin HEAD:http-preconditions-v0.13
