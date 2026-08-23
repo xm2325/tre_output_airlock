@@ -264,6 +264,8 @@ resource "aws_ecs_task_definition" "airlock" {
         { name = "AIRLOCK_OIDC_EXPECTED_AUDIENCE", value = var.oidc_expected_audience },
         { name = "AIRLOCK_OIDC_EXPECTED_ISSUER", value = var.oidc_expected_issuer },
         { name = "AIRLOCK_OIDC_ROLE_CLAIM", value = "groups" },
+        { name = "AIRLOCK_OIDC_CACHE_TTL_SECONDS", value = tostring(var.oidc_cache_ttl_seconds) },
+        { name = "AIRLOCK_OIDC_CACHE_MAX_ENTRIES", value = tostring(var.oidc_cache_max_entries) },
         { name = "AIRLOCK_DATABASE_HOST", value = aws_db_instance.airlock.address },
         { name = "AIRLOCK_DATABASE_PORT", value = tostring(aws_db_instance.airlock.port) },
         { name = "AIRLOCK_DATABASE_NAME", value = var.database_name },
