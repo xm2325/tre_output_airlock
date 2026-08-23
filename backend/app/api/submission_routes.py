@@ -216,6 +216,7 @@ async def create_submission(
             _request_id(request),
         )
         db.add(submission)
+        db.flush()
         if scope_key is not None and request_fingerprint is not None:
             db.add(
                 IdempotencyRecord(
