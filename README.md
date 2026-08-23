@@ -40,7 +40,7 @@ flowchart LR
   M --> N[Airlock disclosure checks]
   N --> O{Versioned release policy}
   O -->|ALLOW| P[Signed release decision]
-  O -->|REVIEW| R[Claimed human review]
+  O -->|REVIEW| R[Leased human review]
   O -->|BLOCK| S[Automated block]
   R --> P
   P --> T[Hash-linked audit verification]
@@ -52,9 +52,10 @@ flowchart LR
 | Capability | Repository evidence |
 |---|---|
 | Backend Python / REST | FastAPI service, typed request/response schemas, OpenAPI export, PostgreSQL/SQLAlchemy and Alembic migrations |
-| Identity and authorisation | Local demo identity plus OAuth2/OIDC token-introspection mode, issuer/audience/expiry checks, configurable IdP group-to-RBAC mapping and explicit 401/403/503 paths |
-| Concurrency and workflow safety | Review claims, optimistic concurrency, idempotent submission handling and auditable state transitions |
-| PostgreSQL / RDS | PostgreSQL-backed local stack plus tested RDS-style host/port/user/password configuration and explicit one-off migration contract for multi-task service deployment |
+| Identity and authorisation | OAuth2/OIDC token introspection with issuer/audience/expiry checks, configurable IdP group-to-RBAC mapping, explicit 401/403/503 paths, and a bounded short-lived successful-introspection cache |
+| Identity resilience | 15-second default cache TTL capped by token `exp`, HMAC-SHA256 token digests instead of raw-token cache keys, bounded LRU eviction, failure non-caching and IdP latency/cache telemetry |
+| Concurrency and workflow safety | Optimistic `row_version` compare-and-swap, transactional claim + audit persistence, 30-minute review-claim leases, expired-claim recovery and idempotent submission handling |
+| PostgreSQL / RDS | PostgreSQL-backed local stack, RDS-style configuration, one-off migration contract for multi-task deployment, and PostgreSQL 16 CI that applies Alembic then runs the full backend suite |
 | AWS backend service | Terraform for API Gateway, private ALB, ECS Fargate, RDS PostgreSQL, encrypted EFS, Secrets Manager, CloudWatch and constrained IAM roles; format/init/validate run in GitHub Actions |
 | ETL/ELT pipelines | FHIR, genomic manifest and VCF ingestion with stable run IDs and atomic publication |
 | Clinical and genomic data | Patient, condition, observation, specimen and genomic sample linkage |
@@ -63,7 +64,7 @@ flowchart LR
 | Data quality | Schema drift, foreign keys, required fields, terminology coverage and quarantine issue codes |
 | Metadata and lineage | Source hashes, schema fingerprint, transfer ID, code revision, model status and run metrics |
 | AWS data controls | Terraform S3/KMS/SQS baseline and tested SSE-KMS curated publication plan |
-| CI/CD and QA | Ruff, strict MyPy, pytest/coverage, dependency audits, migration checks, frontend tests/build, Docker full-stack integration and container builds |
+| CI/CD and QA | Ruff, strict MyPy, pytest/coverage, dependency audits, PostgreSQL migration/test contract, frontend tests/build, Docker full-stack integration and container builds |
 
 ## Clinical–genomic ingestion capabilities
 
@@ -95,14 +96,18 @@ The release workflow has three outcomes:
 The Airlock includes:
 
 - researcher, reviewer and admin scopes;
-- owner filtering, review claims and optimistic concurrency control;
-- OAuth2/OIDC token-introspection identity mode with configurable IdP group-to-role mapping;
+- owner filtering and risk-prioritised review queues;
+- transactional review-claim and hash-linked audit persistence;
+- configurable review-claim leases with safe expired-claim reassignment;
+- optimistic concurrency based on `row_version`;
+- OAuth2/OIDC token-introspection identity with configurable IdP group-to-role mapping;
+- bounded short-lived successful-introspection caching with token-expiry capping and LRU eviction;
 - direct-identifier, quasi-identifier, small-cell, uniqueness and free-text checks;
 - versioned release policy and policy workload simulation;
 - HMAC-signed reports and SHA-256-linked audit events;
 - PostgreSQL, Alembic migrations and FastAPI;
 - React and TypeScript dashboard;
-- Prometheus-style metrics and readiness checks;
+- Prometheus-style HTTP, OIDC cache and IdP latency metrics plus readiness checks;
 - a nine-case synthetic benchmark;
 - Docker Compose integration and container builds.
 
@@ -120,7 +125,7 @@ API Gateway HTTP API
          -> OAuth2/OIDC token introspection over HTTPS
 ```
 
-Runtime database credentials, the IdP client secret and report-signing material are injected through Secrets Manager. The service task has no public IP. The application task role intentionally has no AWS control-plane permissions because the current FastAPI process does not call AWS APIs directly. See [`infra/aws/backend_service/README.md`](infra/aws/backend_service/README.md) and [`docs/identity-and-backend-platform.md`](docs/identity-and-backend-platform.md).
+Runtime database credentials, the IdP client secret and report-signing material are injected through Secrets Manager. The service task has no public IP. The application task role intentionally has no AWS control-plane permissions because the current FastAPI process does not call AWS APIs directly. The ECS reference also passes the bounded OIDC cache TTL/capacity settings to each task. See [`infra/aws/backend_service/README.md`](infra/aws/backend_service/README.md) and [`docs/identity-and-backend-platform.md`](docs/identity-and-backend-platform.md).
 
 ## Browser-only Airlock demo
 
@@ -201,16 +206,18 @@ The clinical–genomic workflow checks:
 
 The current Airlock backend contract checks:
 
-- **43 backend tests** with **91.31% coverage** against a 90% gate;
+- **56 backend tests** with **92.04% coverage** against a 90% gate;
 - Ruff and strict MyPy;
 - Python dependency audit;
 - database migration and OpenAPI export;
 - nine-case synthetic policy benchmark;
+- OAuth2/OIDC cache, expiry, failure and numeric-configuration regression paths;
+- transactional review-claim rollback and expired-lease recovery;
 - frontend dependency audit, typecheck, unit tests and build;
 - Docker Compose configuration and full-stack route verification;
 - final container build.
 
-The dedicated AWS backend-service workflow separately checks Terraform format, `init -backend=false` and `validate`, alongside the backend test contract. These checks validate code and configuration; they do not demonstrate a live AWS deployment.
+The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies the real Alembic migration and runs the full backend suite against PostgreSQL. It also checks Terraform format, `init -backend=false` and `validate`. These checks validate code and configuration; they do not demonstrate a live AWS or real IdP deployment.
 
 ## Repository structure
 
@@ -231,7 +238,7 @@ docs/adr/                               Architecture decision records
 
 ## Production boundary
 
-Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing the project as production-ready. The new AWS backend path is a statically validated reference deployment and the OIDC tests mock the identity-provider network boundary. A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, malware scanning, formal privacy/security review and representative source-system validation.
+Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing the project as production-ready. The AWS backend path is a statically validated reference deployment and the OIDC tests mock the identity-provider network boundary. A successfully introspected token can remain accepted until the deliberately short cache TTL expires if it is revoked immediately after introspection; deployments requiring immediate revocation can disable the cache. A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, malware scanning, formal privacy/security review and representative source-system validation.
 
 ## Author
 
