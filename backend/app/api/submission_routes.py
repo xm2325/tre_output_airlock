@@ -23,6 +23,7 @@ from fastapi import (
 )
 from fastapi.responses import PlainTextResponse
 from sqlalchemy import and_, asc, desc, func, or_, select, text, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -35,10 +36,14 @@ from app.api.common import (
 from app.core.auth import Actor, get_actor, require_roles
 from app.core.config import settings
 from app.core.http_preconditions import submission_etag
+from app.core.idempotency import (
+    idempotency_scope_key,
+    submission_request_fingerprint,
+)
 from app.core.policy import API_VERSION, POLICY_VERSION, RULE_CATALOG
 from app.core.telemetry import telemetry
 from app.db import get_db
-from app.models import Finding, Submission
+from app.models import Finding, IdempotencyRecord, Submission
 from app.rules.base import FileContext, FindingResult
 from app.rules.csv_rules import MAX_ROWS_TO_SCAN, SMALL_CELL_THRESHOLD
 from app.schemas import (
@@ -68,6 +73,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 checker = OutputChecker()
 
+
 @router.post(
     "/api/v1/submissions",
     response_model=SubmissionDetail,
@@ -76,6 +82,7 @@ checker = OutputChecker()
 )
 async def create_submission(
     request: Request,
+    response: Response,
     file: UploadFile = File(...),
     project_code: str = Form(default="DEMO-001", min_length=2, max_length=80),
     output_type: str = Form(default="TABLE", min_length=2, max_length=40),
@@ -89,16 +96,15 @@ async def create_submission(
     db: Session = Depends(get_db),
 ) -> Submission:
     if idempotency_key:
-        key = idempotency_key.strip()
-        if not 8 <= len(key) <= 120:
+        raw_key = idempotency_key.strip()
+        if not 8 <= len(raw_key) <= 120:
             raise HTTPException(status_code=400, detail="Idempotency-Key must be 8-120 characters.")
-        existing = db.scalar(select(Submission).where(Submission.idempotency_key == key))
-        if existing is not None:
-            return _get_submission(db, existing.id, actor)
     else:
-        key = None
+        raw_key = None
 
+    normalised_project_code = project_code.strip()
     normalised_output_type = output_type.strip().upper()
+    normalised_description = output_description.strip()
     if normalised_output_type not in {"TABLE", "FIGURE", "REPORT", "OTHER"}:
         raise HTTPException(
             status_code=422, detail="output_type must be TABLE, FIGURE, REPORT or OTHER."
@@ -106,85 +112,158 @@ async def create_submission(
 
     submission_id = str(uuid4())
     safe_filename = Path(file.filename or "upload.bin").name
+    content_type = file.content_type or "application/octet-stream"
     try:
         stored = await store_quarantined_file(file, submission_id)
     except FileTooLargeError as exc:
         raise HTTPException(status_code=413, detail=str(exc)) from exc
 
-    submission = Submission(
-        id=submission_id,
-        project_code=project_code.strip(),
-        output_type=normalised_output_type,
-        output_description=output_description.strip(),
-        filename=safe_filename,
-        content_type=file.content_type or "application/octet-stream",
-        size_bytes=stored.size_bytes,
-        sha256=stored.sha256,
-        idempotency_key=key,
-        status="QUARANTINED",
-        automated_decision="ALLOW",
-        final_decision=None,
-        risk_score=0.0,
-        policy_version=POLICY_VERSION,
-        submitted_by=actor.name,
-        row_version=1,
-    )
-    append_audit_event(
-        submission,
-        "SUBMITTED",
-        actor.name,
-        (
-            f"Project={submission.project_code}; output_type={submission.output_type}; "
-            f"filename={safe_filename}."
-        ),
-        _request_id(request),
-    )
-    append_audit_event(
-        submission,
-        "QUARANTINED",
-        "airlock-service",
-        f"File stored in quarantine; size_bytes={stored.size_bytes}; sha256_recorded=true.",
-        _request_id(request),
-    )
-    submission.status = "SCANNING"
-    append_audit_event(
-        submission,
-        "SCAN_STARTED",
-        "rule-engine",
-        f"Policy={POLICY_VERSION}; deterministic checks started.",
-        _request_id(request),
-    )
-
-    context = FileContext(
-        path=stored.path,
-        filename=safe_filename,
-        content_type=submission.content_type,
-        size_bytes=stored.size_bytes,
-    )
-    result = checker.check(context)
-    findings = list(result.findings)
-    duplicate = _duplicate_finding(db, submission_id, stored.sha256)
-    if duplicate is not None:
-        findings.append(duplicate)
-    _apply_automated_result(submission, findings, result.policy_version)
-    append_audit_event(
-        submission,
-        "AUTOMATED_CHECK_COMPLETED",
-        "rule-engine",
-        (
-            f"Policy={submission.policy_version}; decision={submission.automated_decision}; "
-            f"risk_score={submission.risk_score:.3f}; findings={len(findings)}."
-        ),
-        _request_id(request),
-    )
-    db.add(submission)
+    scope_key: str | None = None
+    request_fingerprint: str | None = None
     try:
-        db.commit()
-    except Exception:
-        quarantined_path(submission.id, submission.filename).unlink(missing_ok=True)
+        if raw_key is not None:
+            scope_key = idempotency_scope_key(actor.name, raw_key)
+            request_fingerprint = submission_request_fingerprint(
+                project_code=normalised_project_code,
+                output_type=normalised_output_type,
+                output_description=normalised_description,
+                filename=safe_filename,
+                content_type=content_type,
+                size_bytes=stored.size_bytes,
+                sha256=stored.sha256,
+            )
+            existing_record = db.scalar(
+                select(IdempotencyRecord).where(IdempotencyRecord.scope_key == scope_key)
+            )
+            if existing_record is not None:
+                stored.path.unlink(missing_ok=True)
+                if existing_record.request_fingerprint != request_fingerprint:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Idempotency-Key was already used with a different request payload."
+                        ),
+                    )
+                existing = _get_submission(db, existing_record.submission_id, actor)
+                response.headers["Idempotency-Replayed"] = "true"
+                response.headers["ETag"] = submission_etag(existing.id, existing.row_version)
+                return existing
+
+        submission = Submission(
+            id=submission_id,
+            project_code=normalised_project_code,
+            output_type=normalised_output_type,
+            output_description=normalised_description,
+            filename=safe_filename,
+            content_type=content_type,
+            size_bytes=stored.size_bytes,
+            sha256=stored.sha256,
+            idempotency_key=None,
+            status="QUARANTINED",
+            automated_decision="ALLOW",
+            final_decision=None,
+            risk_score=0.0,
+            policy_version=POLICY_VERSION,
+            submitted_by=actor.name,
+            row_version=1,
+        )
+        append_audit_event(
+            submission,
+            "SUBMITTED",
+            actor.name,
+            (
+                f"Project={submission.project_code}; output_type={submission.output_type}; "
+                f"filename={safe_filename}."
+            ),
+            _request_id(request),
+        )
+        append_audit_event(
+            submission,
+            "QUARANTINED",
+            "airlock-service",
+            f"File stored in quarantine; size_bytes={stored.size_bytes}; sha256_recorded=true.",
+            _request_id(request),
+        )
+        submission.status = "SCANNING"
+        append_audit_event(
+            submission,
+            "SCAN_STARTED",
+            "rule-engine",
+            f"Policy={POLICY_VERSION}; deterministic checks started.",
+            _request_id(request),
+        )
+
+        context = FileContext(
+            path=stored.path,
+            filename=safe_filename,
+            content_type=submission.content_type,
+            size_bytes=stored.size_bytes,
+        )
+        result = checker.check(context)
+        findings = list(result.findings)
+        duplicate = _duplicate_finding(db, submission_id, stored.sha256)
+        if duplicate is not None:
+            findings.append(duplicate)
+        _apply_automated_result(submission, findings, result.policy_version)
+        append_audit_event(
+            submission,
+            "AUTOMATED_CHECK_COMPLETED",
+            "rule-engine",
+            (
+                f"Policy={submission.policy_version}; decision={submission.automated_decision}; "
+                f"risk_score={submission.risk_score:.3f}; findings={len(findings)}."
+            ),
+            _request_id(request),
+        )
+        db.add(submission)
+        db.flush()
+        if scope_key is not None and request_fingerprint is not None:
+            db.add(
+                IdempotencyRecord(
+                    scope_key=scope_key,
+                    submitted_by=actor.name,
+                    request_fingerprint=request_fingerprint,
+                    submission_id=submission_id,
+                )
+            )
+
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            db.rollback()
+            stored.path.unlink(missing_ok=True)
+            if scope_key is None or request_fingerprint is None:
+                raise
+            winner = db.scalar(
+                select(IdempotencyRecord).where(IdempotencyRecord.scope_key == scope_key)
+            )
+            if winner is None:
+                raise
+            if winner.request_fingerprint != request_fingerprint:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Idempotency-Key was already used with a different request payload.",
+                ) from exc
+            replayed = _get_submission(db, winner.submission_id, actor)
+            response.headers["Idempotency-Replayed"] = "true"
+            response.headers["ETag"] = submission_etag(replayed.id, replayed.row_version)
+            return replayed
+    except HTTPException:
+        db.rollback()
+        stored.path.unlink(missing_ok=True)
         raise
+    except Exception:
+        db.rollback()
+        stored.path.unlink(missing_ok=True)
+        raise
+
+    latest = _get_submission(db, submission.id, actor)
+    if raw_key is not None:
+        response.headers["Idempotency-Replayed"] = "false"
+    response.headers["ETag"] = submission_etag(latest.id, latest.row_version)
     logger.info("Submission checked", extra={"submission_id": submission.id, "status_code": 201})
-    return _get_submission(db, submission.id, actor)
+    return latest
+
 
 @router.get(
     "/api/v1/submissions",
@@ -247,6 +326,7 @@ def list_submissions(
         pages=max(1, math.ceil(total / page_size)),
     )
 
+
 @router.get(
     "/api/v1/submissions/{submission_id}",
     response_model=SubmissionDetail,
@@ -261,6 +341,7 @@ def get_submission(
     submission = _get_submission(db, submission_id, actor)
     response.headers["ETag"] = submission_etag(submission.id, submission.row_version)
     return submission
+
 
 @router.post(
     "/api/v1/submissions/{submission_id}/recheck",
@@ -312,6 +393,7 @@ def recheck_submission(
     db.commit()
     return _get_submission(db, submission.id, actor)
 
+
 @router.get(
     "/api/v1/submissions/{submission_id}/report",
     tags=["submissions"],
@@ -322,6 +404,7 @@ def decision_report(
     db: Session = Depends(get_db),
 ) -> DecisionReportOut:
     return build_report(_get_submission(db, submission_id, actor))
+
 
 @router.get(
     "/api/v1/submissions/{submission_id}/report/verify",
@@ -342,6 +425,7 @@ def verify_decision_report(
         audit_chain_valid=audit_valid,
     )
 
+
 @router.get(
     "/api/v1/submissions/{submission_id}/audit/verify",
     response_model=AuditVerificationOut,
@@ -360,6 +444,7 @@ def verify_submission_audit(
         checked_events=len(submission.audit_events),
         first_invalid_event_id=invalid_id,
     )
+
 
 @router.delete(
     "/api/v1/submissions/{submission_id}/file",
@@ -386,4 +471,3 @@ def delete_quarantined_file(
         )
         db.commit()
     return _get_submission(db, submission.id, actor)
-
