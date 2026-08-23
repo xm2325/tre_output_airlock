@@ -102,7 +102,9 @@ def test_different_actors_can_reuse_same_raw_key(client: TestClient) -> None:
     assert second.headers["idempotency-replayed"] == "false"
 
     with SessionLocal() as db:
-        records = list(db.scalars(select(IdempotencyRecord).order_by(IdempotencyRecord.submitted_by)))
+        records = list(
+            db.scalars(select(IdempotencyRecord).order_by(IdempotencyRecord.submitted_by))
+        )
         submissions = list(db.scalars(select(Submission)))
         assert len(records) == 2
         assert len({record.scope_key for record in records}) == 2
