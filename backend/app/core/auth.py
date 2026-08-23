@@ -1,17 +1,23 @@
 from __future__ import annotations
 
 import base64
+import hashlib
+import hmac
 import json
 import os
+from collections import OrderedDict
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from time import time
+from threading import Lock
+from time import perf_counter, time
 from typing import Annotated, Literal, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from fastapi import Depends, Header, HTTPException, status
+
+from app.core.telemetry import telemetry
 
 Role = Literal["researcher", "reviewer", "admin"]
 _SUPPORTED_ROLES: frozenset[str] = frozenset({"researcher", "reviewer", "admin"})
@@ -34,7 +40,19 @@ class OidcIntrospectionSettings:
     expected_audience: str | None
     expected_issuer: str | None
     timeout_seconds: float
+    cache_ttl_seconds: float
+    cache_max_entries: int
     role_map: Mapping[str, Role]
+
+
+@dataclass(frozen=True)
+class CachedActor:
+    actor: Actor
+    expires_at: float
+
+
+_OIDC_CACHE: OrderedDict[str, CachedActor] = OrderedDict()
+_OIDC_CACHE_LOCK = Lock()
 
 
 def _http_error(status_code: int, detail: str) -> HTTPException:
@@ -68,6 +86,28 @@ def _parse_role_map(raw: str) -> dict[str, Role]:
     return mapping
 
 
+def _parse_float_setting(name: str, default: str, *, minimum: float, maximum: float) -> float:
+    raw = os.getenv(name, default).strip()
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be numeric") from exc
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum:g} and {maximum:g}")
+    return value
+
+
+def _parse_int_setting(name: str, default: str, *, minimum: int, maximum: int) -> int:
+    raw = os.getenv(name, default).strip()
+    try:
+        value = int(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be an integer") from exc
+    if value < minimum or value > maximum:
+        raise ValueError(f"{name} must be between {minimum} and {maximum}")
+    return value
+
+
 def _load_oidc_settings() -> OidcIntrospectionSettings:
     introspection_url = os.getenv("AIRLOCK_OIDC_INTROSPECTION_URL", "").strip()
     client_id = os.getenv("AIRLOCK_OIDC_CLIENT_ID", "").strip()
@@ -78,13 +118,24 @@ def _load_oidc_settings() -> OidcIntrospectionSettings:
             "AIRLOCK_OIDC_CLIENT_ID and AIRLOCK_OIDC_CLIENT_SECRET"
         )
 
-    timeout_raw = os.getenv("AIRLOCK_OIDC_TIMEOUT_SECONDS", "3.0").strip()
-    try:
-        timeout_seconds = float(timeout_raw)
-    except ValueError as exc:
-        raise ValueError("AIRLOCK_OIDC_TIMEOUT_SECONDS must be numeric") from exc
-    if timeout_seconds <= 0 or timeout_seconds > 30:
-        raise ValueError("AIRLOCK_OIDC_TIMEOUT_SECONDS must be in (0, 30]")
+    timeout_seconds = _parse_float_setting(
+        "AIRLOCK_OIDC_TIMEOUT_SECONDS",
+        "3.0",
+        minimum=0.1,
+        maximum=30.0,
+    )
+    cache_ttl_seconds = _parse_float_setting(
+        "AIRLOCK_OIDC_CACHE_TTL_SECONDS",
+        "15.0",
+        minimum=0.0,
+        maximum=60.0,
+    )
+    cache_max_entries = _parse_int_setting(
+        "AIRLOCK_OIDC_CACHE_MAX_ENTRIES",
+        "2048",
+        minimum=1,
+        maximum=10000,
+    )
 
     return OidcIntrospectionSettings(
         introspection_url=introspection_url,
@@ -95,6 +146,8 @@ def _load_oidc_settings() -> OidcIntrospectionSettings:
         expected_audience=os.getenv("AIRLOCK_OIDC_EXPECTED_AUDIENCE") or None,
         expected_issuer=os.getenv("AIRLOCK_OIDC_EXPECTED_ISSUER") or None,
         timeout_seconds=timeout_seconds,
+        cache_ttl_seconds=cache_ttl_seconds,
+        cache_max_entries=cache_max_entries,
         role_map=_parse_role_map(os.getenv("AIRLOCK_OIDC_ROLE_MAP", "")),
     )
 
@@ -131,26 +184,32 @@ def _validate_expected_claim(
         )
 
 
+def _parse_token_expiry(claims: Mapping[str, object]) -> float | None:
+    expiry = claims.get("exp")
+    if expiry is None:
+        return None
+    if not isinstance(expiry, (int, float, str)):
+        raise _http_error(status.HTTP_401_UNAUTHORIZED, "Token expiry claim is invalid.")
+    try:
+        parsed = float(expiry)
+    except ValueError as exc:
+        raise _http_error(
+            status.HTTP_401_UNAUTHORIZED,
+            "Token expiry claim is invalid.",
+        ) from exc
+    if parsed <= time():
+        raise _http_error(status.HTTP_401_UNAUTHORIZED, "Bearer token has expired.")
+    return parsed
+
+
 def _actor_from_introspection_claims(
     claims: Mapping[str, object],
     config: OidcIntrospectionSettings,
-) -> Actor:
+) -> tuple[Actor, float | None]:
     if claims.get("active") is not True:
         raise _http_error(status.HTTP_401_UNAUTHORIZED, "Bearer token is inactive.")
 
-    expiry = claims.get("exp")
-    if expiry is not None:
-        if not isinstance(expiry, (int, float, str)):
-            raise _http_error(status.HTTP_401_UNAUTHORIZED, "Token expiry claim is invalid.")
-        try:
-            if float(expiry) <= time():
-                raise _http_error(status.HTTP_401_UNAUTHORIZED, "Bearer token has expired.")
-        except ValueError as exc:
-            raise _http_error(
-                status.HTTP_401_UNAUTHORIZED,
-                "Token expiry claim is invalid.",
-            ) from exc
-
+    token_expiry = _parse_token_expiry(claims)
     _validate_expected_claim(claims, "aud", config.expected_audience)
     _validate_expected_claim(claims, "iss", config.expected_issuer)
 
@@ -158,10 +217,78 @@ def _actor_from_introspection_claims(
     if len(subject) < 2 or len(subject) > 200:
         raise _http_error(status.HTTP_401_UNAUTHORIZED, "Token subject claim is invalid.")
 
-    return Actor(name=subject, role=_select_role(claims, config))
+    return Actor(name=subject, role=_select_role(claims, config)), token_expiry
 
 
-def _introspect_token(token: str, config: OidcIntrospectionSettings) -> Actor:
+def _cache_key(token: str, config: OidcIntrospectionSettings) -> str:
+    contract = json.dumps(
+        {
+            "aud": config.expected_audience,
+            "client_id": config.client_id,
+            "iss": config.expected_issuer,
+            "role_claim": config.role_claim,
+            "role_map": sorted(config.role_map.items()),
+            "subject_claim": config.subject_claim,
+            "url": config.introspection_url,
+        },
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    message = f"{contract}\0{token}".encode()
+    return hmac.new(config.client_secret.encode(), message, hashlib.sha256).hexdigest()
+
+
+def _get_cached_actor(token: str, config: OidcIntrospectionSettings) -> Actor | None:
+    if config.cache_ttl_seconds == 0:
+        telemetry.record_oidc("cache_disabled")
+        return None
+
+    key = _cache_key(token, config)
+    now = time()
+    with _OIDC_CACHE_LOCK:
+        cached = _OIDC_CACHE.get(key)
+        if cached is None:
+            telemetry.record_oidc("cache_miss")
+            return None
+        if cached.expires_at <= now:
+            del _OIDC_CACHE[key]
+            telemetry.record_oidc("cache_expired")
+            return None
+        _OIDC_CACHE.move_to_end(key)
+    telemetry.record_oidc("cache_hit")
+    return cached.actor
+
+
+def _store_cached_actor(
+    token: str,
+    actor: Actor,
+    token_expiry: float | None,
+    config: OidcIntrospectionSettings,
+) -> None:
+    if config.cache_ttl_seconds == 0:
+        return
+
+    now = time()
+    expires_at = now + config.cache_ttl_seconds
+    if token_expiry is not None:
+        expires_at = min(expires_at, token_expiry)
+    if expires_at <= now:
+        return
+
+    key = _cache_key(token, config)
+    with _OIDC_CACHE_LOCK:
+        _OIDC_CACHE[key] = CachedActor(actor=actor, expires_at=expires_at)
+        _OIDC_CACHE.move_to_end(key)
+        while len(_OIDC_CACHE) > config.cache_max_entries:
+            _OIDC_CACHE.popitem(last=False)
+
+
+def _clear_oidc_cache() -> None:
+    with _OIDC_CACHE_LOCK:
+        _OIDC_CACHE.clear()
+
+
+def _introspect_token(token: str, config: OidcIntrospectionSettings) -> tuple[Actor, float | None]:
     credentials = base64.b64encode(
         f"{config.client_id}:{config.client_secret}".encode()
     ).decode("ascii")
@@ -175,21 +302,27 @@ def _introspect_token(token: str, config: OidcIntrospectionSettings) -> Actor:
         },
         method="POST",
     )
+    started = perf_counter()
     try:
         with urlopen(request, timeout=config.timeout_seconds) as response:  # noqa: S310
             payload = json.loads(response.read().decode("utf-8"))
     except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+        telemetry.record_oidc("upstream_error", (perf_counter() - started) * 1000)
         raise _http_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "Identity provider introspection is unavailable.",
         ) from exc
 
     if not isinstance(payload, dict):
+        telemetry.record_oidc("upstream_invalid", (perf_counter() - started) * 1000)
         raise _http_error(
             status.HTTP_503_SERVICE_UNAVAILABLE,
             "Identity provider returned an invalid introspection response.",
         )
-    return _actor_from_introspection_claims(payload, config)
+
+    actor, token_expiry = _actor_from_introspection_claims(payload, config)
+    telemetry.record_oidc("upstream_success", (perf_counter() - started) * 1000)
+    return actor, token_expiry
 
 
 def _demo_actor(user: str, role: str) -> Actor:
@@ -232,7 +365,14 @@ def get_actor(
         config = _load_oidc_settings()
     except ValueError as exc:
         raise _http_error(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
-    return _introspect_token(token, config)
+
+    cached_actor = _get_cached_actor(token, config)
+    if cached_actor is not None:
+        return cached_actor
+
+    actor, token_expiry = _introspect_token(token, config)
+    _store_cached_actor(token, actor, token_expiry, config)
+    return actor
 
 
 def require_roles(*allowed: Role) -> Callable[..., Actor]:
