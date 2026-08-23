@@ -75,7 +75,8 @@ class AwsSqsTransport:
             message_id = item.get("MessageId")
             receipt_handle = item.get("ReceiptHandle")
             body = item.get("Body")
-            if not all(isinstance(value, str) and value for value in (message_id, receipt_handle, body)):
+            values = (message_id, receipt_handle, body)
+            if not all(isinstance(value, str) and value for value in values):
                 raise RuntimeError("SQS receive_message returned a malformed message")
             result.append(
                 ReceivedQueueMessage(
