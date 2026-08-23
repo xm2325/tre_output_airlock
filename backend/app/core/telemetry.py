@@ -75,7 +75,10 @@ class Telemetry:
 
         lines.extend(
             [
-                "# HELP airlock_oidc_upstream_duration_ms Recent IdP introspection latency summary.",
+                (
+                    "# HELP airlock_oidc_upstream_duration_ms "
+                    "Recent IdP introspection latency summary."
+                ),
                 "# TYPE airlock_oidc_upstream_duration_ms gauge",
             ]
         )
