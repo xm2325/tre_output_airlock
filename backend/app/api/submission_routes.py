@@ -227,11 +227,13 @@ def list_submissions(
         statement = statement.where(*conditions)
         count_statement = count_statement.where(*conditions)
     if sort == "oldest":
-        statement = statement.order_by(asc(Submission.created_at))
+        statement = statement.order_by(asc(Submission.created_at), asc(Submission.id))
     elif sort == "risk_desc":
-        statement = statement.order_by(desc(Submission.risk_score), asc(Submission.created_at))
+        statement = statement.order_by(
+            desc(Submission.risk_score), asc(Submission.created_at), asc(Submission.id)
+        )
     else:
-        statement = statement.order_by(desc(Submission.created_at))
+        statement = statement.order_by(desc(Submission.created_at), desc(Submission.id))
 
     total = int(db.scalar(count_statement) or 0)
     rows = list(db.scalars(statement.offset((page - 1) * page_size).limit(page_size)))
