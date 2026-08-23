@@ -29,6 +29,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from app.api.common import _get_submission, _request_id
 from app.core.auth import Actor, get_actor, require_roles
+from app.core.async_scan import load_async_scan_settings
 from app.core.config import settings
 from app.core.http_preconditions import submission_etag
 from app.core.idempotency import (
@@ -61,6 +62,7 @@ from app.schemas import (
 )
 from app.services.audit import append_audit_event, verify_audit_chain
 from app.services.checker import ACTION_PRIORITY, OutputChecker, decision_from_findings
+from app.services.scan_jobs import enqueue_scan
 from app.services.scanning import (
     ScanAuditContract,
     ScanInputUnavailable,
@@ -102,6 +104,7 @@ async def create_submission(
     else:
         raw_key = None
 
+    async_scan = load_async_scan_settings()
     normalised_project_code = project_code.strip()
     normalised_output_type = output_type.strip().upper()
     normalised_description = output_description.strip()
@@ -147,6 +150,8 @@ async def create_submission(
                 existing = _get_submission(db, existing_record.submission_id, actor)
                 response.headers["Idempotency-Replayed"] = "true"
                 response.headers["ETag"] = submission_etag(existing.id, existing.row_version)
+                if async_scan.mode == "queued" and existing.status in {"QUEUED", "SCANNING"}:
+                    response.status_code = status.HTTP_202_ACCEPTED
                 return existing
 
         submission = Submission(
@@ -184,15 +189,18 @@ async def create_submission(
             f"File stored in quarantine; size_bytes={stored.size_bytes}; sha256_recorded=true.",
             _request_id(request),
         )
-        run_submission_scan(
-            db,
-            submission,
-            checker=checker,
-            request_id=_request_id(request),
-            path=stored.path,
-        )
         db.add(submission)
         db.flush()
+        if async_scan.mode == "queued":
+            enqueue_scan(db, submission, request_id=_request_id(request))
+        else:
+            run_submission_scan(
+                db,
+                submission,
+                checker=checker,
+                request_id=_request_id(request),
+                path=stored.path,
+            )
         if scope_key is not None and request_fingerprint is not None:
             db.add(
                 IdempotencyRecord(
@@ -223,6 +231,8 @@ async def create_submission(
             replayed = _get_submission(db, winner.submission_id, actor)
             response.headers["Idempotency-Replayed"] = "true"
             response.headers["ETag"] = submission_etag(replayed.id, replayed.row_version)
+            if async_scan.mode == "queued" and replayed.status in {"QUEUED", "SCANNING"}:
+                response.status_code = status.HTTP_202_ACCEPTED
             return replayed
     except HTTPException:
         db.rollback()
@@ -236,6 +246,8 @@ async def create_submission(
     latest = _get_submission(db, submission.id, actor)
     if raw_key is not None:
         response.headers["Idempotency-Replayed"] = "false"
+    if async_scan.mode == "queued":
+        response.status_code = status.HTTP_202_ACCEPTED
     response.headers["ETag"] = submission_etag(latest.id, latest.row_version)
     logger.info("Submission checked", extra={"submission_id": submission.id, "status_code": 201})
     return latest
@@ -250,8 +262,9 @@ def list_submissions(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     decision: Literal["ALLOW", "REVIEW", "BLOCK"] | None = Query(default=None),
-    workflow_status: Literal["AWAITING_REVIEW", "COMPLETED", "QUARANTINED", "SCANNING"]
-    | None = Query(default=None),
+    workflow_status: Literal[
+        "AWAITING_REVIEW", "COMPLETED", "QUARANTINED", "QUEUED", "SCANNING"
+    ] | None = Query(default=None),
     project_code: str | None = Query(default=None, max_length=80),
     search: str | None = Query(default=None, max_length=120),
     sort: Literal["newest", "oldest", "risk_desc"] = Query(default="newest"),
