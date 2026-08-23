@@ -104,7 +104,10 @@ def list_submissions_cursor(
     elif sort == "risk_desc":
         if anchor is not None:
             if anchor.risk_score is None:
-                raise HTTPException(status_code=400, detail="Invalid or incompatible submission cursor.")
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid or incompatible submission cursor.",
+                )
             statement = statement.where(
                 or_(
                     Submission.risk_score < anchor.risk_score,
