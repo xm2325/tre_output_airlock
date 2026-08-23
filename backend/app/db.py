@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
-from app.core.config import settings
+from app.core.config import build_database_engine_options, settings
 
 
 class Base(DeclarativeBase):
@@ -22,9 +22,9 @@ def _ensure_sqlite_parent(database_url: str) -> None:
 
 
 _ensure_sqlite_parent(settings.database_url)
-connect_args = {"check_same_thread": False} if settings.database_url.startswith("sqlite") else {}
 engine = create_engine(
-    settings.database_url, connect_args=connect_args, future=True, pool_pre_ping=True
+    settings.database_url,
+    **build_database_engine_options(settings.database_url),
 )
 SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
