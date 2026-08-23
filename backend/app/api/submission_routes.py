@@ -28,8 +28,8 @@ from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
 from app.api.common import _get_submission, _request_id
-from app.core.auth import Actor, get_actor, require_roles
 from app.core.async_scan import load_async_scan_settings
+from app.core.auth import Actor, get_actor, require_roles
 from app.core.config import settings
 from app.core.http_preconditions import submission_etag
 from app.core.idempotency import (
@@ -62,13 +62,13 @@ from app.schemas import (
 )
 from app.services.audit import append_audit_event, verify_audit_chain
 from app.services.checker import ACTION_PRIORITY, OutputChecker, decision_from_findings
+from app.services.reports import build_report, verify_report
 from app.services.scan_jobs import enqueue_scan
 from app.services.scanning import (
     ScanAuditContract,
     ScanInputUnavailable,
     run_submission_scan,
 )
-from app.services.reports import build_report, verify_report
 from app.services.storage import FileTooLargeError, quarantined_path, store_quarantined_file
 
 logger = logging.getLogger(__name__)
