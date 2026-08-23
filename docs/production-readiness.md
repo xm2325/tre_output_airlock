@@ -11,7 +11,7 @@ This document separates what the repository demonstrates from work required befo
 | Processing | deterministic synchronous checks | isolated asynchronous workers, malware scan, parser timeouts, retries and workload resource limits |
 | Policy | versioned catalogue and retrospective simulation | formal owner, approval record, test corpus and controlled release process |
 | Audit | request IDs, hash-linked events, signed reports and atomic review-claim/audit persistence | central append-only log, managed signing key, independent verification and recovery testing |
-| Operations | database/storage readiness checks, Prometheus-style HTTP telemetry, OIDC cache/single-flight outcomes, IdP latency and queue-age measures | dashboards, service-level objectives, paging, dependency-specific alerts, database-pool observability and incident response |
+| Operations | database/storage readiness checks, Prometheus HTTP telemetry, OIDC cache/single-flight outcomes, IdP latency, live per-process PostgreSQL pool capacity/utilisation gauges and checkout-timeout counts | dashboards, service-level objectives, paging, aggregate RDS/ECS capacity alerts, dependency-specific alerts and incident response |
 | Privacy | evidence redaction and synthetic benchmark | privacy review, data-flow assessment and disclosure-control validation |
 | Delivery | CI, cross-stack release-version contract, dependency audits, PostgreSQL migration/pool contract, Terraform validation and container configuration | image signing, software bill of materials, environment promotion, deployment migration orchestration and rollback testing |
 
@@ -34,7 +34,7 @@ This document separates what the repository demonstrates from work required befo
 
 The application pool budget is **per API task**, not a service-wide global cap. With the current reference defaults, each task can hold up to `pool_size + max_overflow = 5 + 5 = 10` application connections. A two-task service can therefore attempt roughly 20 application connections before allowing for a one-off migration task, administrative sessions, monitoring, failover behavior and other database users.
 
-The dedicated PostgreSQL 16 CI job deliberately uses a smaller `3 + 2` budget with a 0.2-second checkout timeout. Its PostgreSQL-only regression test opens all five allowed connections, verifies that a sixth checkout raises SQLAlchemy `TimeoutError`, closes every held connection, confirms the checked-out count returns to zero, and successfully executes `SELECT 1` on a new connection. This validates the pool behavior; it does not determine the correct production capacity for a particular RDS instance.
+The dedicated PostgreSQL 16 CI job deliberately uses a smaller `3 + 2` budget with a 0.2-second checkout timeout. Its PostgreSQL-only regression test opens all five allowed connections, verifies the live Prometheus gauges show full utilisation and zero remaining capacity, confirms readiness and a database-backed API return 503 while saturated, checks the checkout-timeout counter increases, closes every held connection, confirms the gauges recover, readiness returns 200 and `SELECT 1` succeeds on a new connection. This validates bounded exhaustion, observability and recovery; it does not determine the correct production capacity for a particular RDS instance.
 
 Production values must therefore be chosen from the actual RDS `max_connections`, expected ECS task count and scaling range, request concurrency and transaction duration, with explicit headroom for migrations, administration, monitoring and failover.
 
