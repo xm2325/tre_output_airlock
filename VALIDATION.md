@@ -1,10 +1,13 @@
 # Validation record
 
-## Current GitHub Actions evidence — 2026-08-22
+## Current GitHub Actions evidence — verified 24 August 2026
 
-Verified code commit: `49e7d7025e76ddb9ab8bb25dbeeced1458921ff7`
+Validated code commit: `49e7d7025e76ddb9ab8bb25dbeeced1458921ff7`
 
-The current branch has successful `CI` and `AWS backend service` workflow runs.
+The branch has successful validation for that code state:
+
+- `CI` workflow run `32606026115`: SUCCESS.
+- `AWS backend service` workflow run `32606026128`: SUCCESS.
 
 The dedicated backend-service workflow observed:
 
@@ -21,6 +24,8 @@ Entrypoint shell syntax: passed
 ```
 
 The 43-test backend suite includes seven OIDC authentication tests. These tests mock the external identity-provider network boundary. The Terraform checks validate configuration consistency only. This evidence does **not** prove a live AWS deployment or a real Okta tenant integration.
+
+Commits after `49e7d7025e76ddb9ab8bb25dbeeced1458921ff7` in the application-evidence control cycle changed documentation/state only. They do not strengthen or replace the validated implementation evidence above.
 
 The backend counts above supersede the older backend counts in the historical local record below.
 
