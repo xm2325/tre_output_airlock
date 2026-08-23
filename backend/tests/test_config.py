@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import pytest
 
-from app.core.config import build_database_url
+from app.core.config import (
+    build_database_engine_options,
+    build_database_url,
+    load_database_pool_settings,
+)
 
 
 def _clear_database_env(monkeypatch) -> None:  # type: ignore[no-untyped-def]
@@ -13,6 +17,10 @@ def _clear_database_env(monkeypatch) -> None:  # type: ignore[no-untyped-def]
         "AIRLOCK_DATABASE_NAME",
         "AIRLOCK_DATABASE_USER",
         "AIRLOCK_DATABASE_PASSWORD",
+        "AIRLOCK_DATABASE_POOL_SIZE",
+        "AIRLOCK_DATABASE_MAX_OVERFLOW",
+        "AIRLOCK_DATABASE_POOL_TIMEOUT_SECONDS",
+        "AIRLOCK_DATABASE_POOL_RECYCLE_SECONDS",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -62,3 +70,68 @@ def test_invalid_database_port_is_rejected(monkeypatch) -> None:  # type: ignore
 
     with pytest.raises(ValueError, match="between 1 and 65535"):
         build_database_url()
+
+
+def test_default_postgresql_pool_contract_is_bounded(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _clear_database_env(monkeypatch)
+
+    pool = load_database_pool_settings()
+    assert pool.size == 5
+    assert pool.max_overflow == 5
+    assert pool.timeout_seconds == 5.0
+    assert pool.recycle_seconds == 900
+
+    options = build_database_engine_options("postgresql+psycopg://service@db/airlock")
+    assert options == {
+        "future": True,
+        "pool_pre_ping": True,
+        "pool_size": 5,
+        "max_overflow": 5,
+        "pool_timeout": 5.0,
+        "pool_recycle": 900,
+    }
+
+
+def test_postgresql_pool_contract_accepts_valid_overrides(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _clear_database_env(monkeypatch)
+    monkeypatch.setenv("AIRLOCK_DATABASE_POOL_SIZE", "3")
+    monkeypatch.setenv("AIRLOCK_DATABASE_MAX_OVERFLOW", "2")
+    monkeypatch.setenv("AIRLOCK_DATABASE_POOL_TIMEOUT_SECONDS", "0.2")
+    monkeypatch.setenv("AIRLOCK_DATABASE_POOL_RECYCLE_SECONDS", "300")
+
+    pool = load_database_pool_settings()
+    assert pool.size == 3
+    assert pool.max_overflow == 2
+    assert pool.timeout_seconds == 0.2
+    assert pool.recycle_seconds == 300
+
+
+def test_sqlite_engine_options_ignore_postgresql_pool_environment(monkeypatch) -> None:  # type: ignore[no-untyped-def]
+    _clear_database_env(monkeypatch)
+    monkeypatch.setenv("AIRLOCK_DATABASE_POOL_SIZE", "not-an-integer")
+
+    assert build_database_engine_options("sqlite:///./data/test.db") == {
+        "future": True,
+        "pool_pre_ping": True,
+        "connect_args": {"check_same_thread": False},
+    }
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        ("AIRLOCK_DATABASE_POOL_SIZE", "0", "between 1 and 20"),
+        ("AIRLOCK_DATABASE_MAX_OVERFLOW", "21", "between 0 and 20"),
+        ("AIRLOCK_DATABASE_POOL_TIMEOUT_SECONDS", "nan", "between 0.1 and 30"),
+        ("AIRLOCK_DATABASE_POOL_TIMEOUT_SECONDS", "31", "between 0.1 and 30"),
+        ("AIRLOCK_DATABASE_POOL_RECYCLE_SECONDS", "29", "between 30 and 3600"),
+    ],
+)
+def test_invalid_postgresql_pool_settings_fail_closed(
+    monkeypatch, name: str, value: str, message: str
+) -> None:  # type: ignore[no-untyped-def]
+    _clear_database_env(monkeypatch)
+    monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValueError, match=message):
+        load_database_pool_settings()
