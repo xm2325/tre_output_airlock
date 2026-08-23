@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal
 
+from app.version import __version__
+
 PolicyAction = Literal["ALLOW", "REVIEW", "BLOCK"]
 
-API_VERSION = "0.3.1"
+API_VERSION = __version__
 POLICY_VERSION = "demo-policy-2026.2"
 
 
