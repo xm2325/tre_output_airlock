@@ -68,6 +68,20 @@ class Submission(Base):
         return self.file_deleted_at is None
 
 
+class IdempotencyRecord(Base):
+    __tablename__ = "idempotency_records"
+
+    scope_key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    submitted_by: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    submission_id: Mapped[str] = mapped_column(
+        ForeignKey("submissions.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class Finding(Base):
     __tablename__ = "findings"
 
