@@ -71,6 +71,13 @@ class SubmissionPage(BaseModel):
     pages: int
 
 
+class SubmissionCursorPage(BaseModel):
+    items: list[SubmissionSummary]
+    limit: int
+    has_more: bool
+    next_cursor: str | None
+
+
 class ReviewRequest(BaseModel):
     decision: ReviewDecision
     rationale: str = Field(min_length=20, max_length=2000)
