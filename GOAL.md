@@ -1,12 +1,15 @@
 # Goal Control
 
 Goal ID: genomics-england-backend-application-ready
-Status: ACTIVE
+Status: GOAL_REACHED
 Repository: `xm2325/tre_output_airlock`
 Branch: `genomics-england-python-backend-v0.4`
 Target role: Genomics England — Software Engineer - Python
 Target outcome: maximise the probability of reaching interview for the current Backend Python Software Engineer vacancy.
 Application deadline: 6 September 2026, 23:00 UK time
+Reached: 24 August 2026
+Final validated code commit: `49e7d7025e76ddb9ab8bb25dbeeced1458921ff7`
+Final validated CI: `CI` run `32606026115`; `AWS backend service` run `32606026128`; both successful.
 
 ## /goal
 
