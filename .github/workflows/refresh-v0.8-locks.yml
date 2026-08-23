@@ -1,0 +1,42 @@
+name: Refresh v0.8 locks once
+
+on:
+  push:
+    branches: [oidc-singleflight-v0.8]
+    paths:
+      - ".github/workflows/refresh-v0.8-locks.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: oidc-singleflight-v0.8
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Refresh Python project lock metadata
+        working-directory: backend
+        run: uv lock
+      - name: Refresh frontend lock metadata
+        working-directory: frontend
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit generated lock files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/uv.lock frontend/package-lock.json
+          if git diff --cached --quiet; then
+            echo "No lock-file changes generated."
+            exit 0
+          fi
+          git diff --cached --check
+          git commit -m "release: refresh v0.8 lock metadata"
+          git push origin HEAD:oidc-singleflight-v0.8
