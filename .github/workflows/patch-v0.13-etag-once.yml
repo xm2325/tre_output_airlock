@@ -1,0 +1,55 @@
+name: Patch v0.13 ETag once
+
+on:
+  push:
+    branches: [http-preconditions-v0.13]
+    paths:
+      - ".github/workflows/patch-v0.13-etag-once.yml"
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: http-preconditions-v0.13
+      - name: Add ETag to submission detail GET
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("backend/app/api/submission_routes.py")
+          text = path.read_text()
+
+          old = "    Query,\n    Request,\n    UploadFile,"
+          new = "    Query,\n    Request,\n    Response,\n    UploadFile,"
+          if old not in text:
+              raise SystemExit("FastAPI import anchor missing")
+          text = text.replace(old, new, 1)
+
+          old = "from app.core.config import settings\nfrom app.core.policy import API_VERSION, POLICY_VERSION, RULE_CATALOG"
+          new = "from app.core.config import settings\nfrom app.core.http_preconditions import submission_etag\nfrom app.core.policy import API_VERSION, POLICY_VERSION, RULE_CATALOG"
+          if old not in text:
+              raise SystemExit("http precondition import anchor missing")
+          text = text.replace(old, new, 1)
+
+          old = '''def get_submission(\n    submission_id: str,\n    actor: Actor = Depends(get_actor),\n    db: Session = Depends(get_db),\n) -> Submission:\n    return _get_submission(db, submission_id, actor)'''
+          new = '''def get_submission(\n    response: Response,\n    submission_id: str,\n    actor: Actor = Depends(get_actor),\n    db: Session = Depends(get_db),\n) -> Submission:\n    submission = _get_submission(db, submission_id, actor)\n    response.headers["ETag"] = submission_etag(submission.id, submission.row_version)\n    return submission'''
+          if old not in text:
+              raise SystemExit("get_submission anchor missing")
+          text = text.replace(old, new, 1)
+
+          path.write_text(text)
+          PY
+          git diff --check
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add backend/app/api/submission_routes.py
+          git diff --cached --quiet && exit 0
+          git commit -m "feat: publish strong ETag on submission detail"
+          git push origin HEAD:http-preconditions-v0.13
