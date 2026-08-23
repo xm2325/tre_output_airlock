@@ -38,8 +38,7 @@ class Telemetry:
         )
 
     def prometheus(self) -> str:
-        # Import lazily to keep the core telemetry module independent of SQLAlchemy
-        # during application import while still reporting the live per-process pool.
+        # Import lazily so this module stays independent of SQLAlchemy during import.
         from app.db import database_pool_snapshot
 
         database_pool = database_pool_snapshot()
@@ -106,33 +105,66 @@ class Telemetry:
         if database_pool is not None:
             lines.extend(
                 [
-                    "# HELP airlock_database_pool_configured_size Persistent connections configured per API process.",
+                    (
+                        "# HELP airlock_database_pool_configured_size "
+                        "Persistent connections configured per API process."
+                    ),
                     "# TYPE airlock_database_pool_configured_size gauge",
                     f"airlock_database_pool_configured_size {database_pool.configured_size}",
-                    "# HELP airlock_database_pool_max_overflow Additional overflow connections allowed per API process.",
+                    (
+                        "# HELP airlock_database_pool_max_overflow "
+                        "Additional overflow connections allowed per API process."
+                    ),
                     "# TYPE airlock_database_pool_max_overflow gauge",
                     f"airlock_database_pool_max_overflow {database_pool.max_overflow}",
-                    "# HELP airlock_database_pool_capacity Maximum application connections available to this API process.",
+                    (
+                        "# HELP airlock_database_pool_capacity "
+                        "Maximum connections available to this API process."
+                    ),
                     "# TYPE airlock_database_pool_capacity gauge",
                     f"airlock_database_pool_capacity {database_pool.capacity}",
-                    "# HELP airlock_database_pool_checked_out Connections currently checked out by this API process.",
+                    (
+                        "# HELP airlock_database_pool_checked_out "
+                        "Connections currently checked out by this API process."
+                    ),
                     "# TYPE airlock_database_pool_checked_out gauge",
                     f"airlock_database_pool_checked_out {database_pool.checked_out}",
-                    "# HELP airlock_database_pool_checked_in Established persistent connections currently idle in the pool.",
+                    (
+                        "# HELP airlock_database_pool_checked_in "
+                        "Established persistent connections currently idle."
+                    ),
                     "# TYPE airlock_database_pool_checked_in gauge",
                     f"airlock_database_pool_checked_in {database_pool.checked_in}",
-                    "# HELP airlock_database_pool_overflow_open Open connections above the configured persistent pool size.",
+                    (
+                        "# HELP airlock_database_pool_overflow_open "
+                        "Open connections above the persistent pool size."
+                    ),
                     "# TYPE airlock_database_pool_overflow_open gauge",
                     f"airlock_database_pool_overflow_open {database_pool.overflow_open}",
-                    "# HELP airlock_database_pool_available Remaining checkout capacity in this API process.",
+                    (
+                        "# HELP airlock_database_pool_available "
+                        "Remaining checkout capacity in this API process."
+                    ),
                     "# TYPE airlock_database_pool_available gauge",
                     f"airlock_database_pool_available {database_pool.available}",
-                    "# HELP airlock_database_pool_utilisation_ratio Checked-out connections divided by configured pool plus overflow capacity.",
+                    (
+                        "# HELP airlock_database_pool_utilisation_ratio "
+                        "Checked-out connections divided by total pool capacity."
+                    ),
                     "# TYPE airlock_database_pool_utilisation_ratio gauge",
-                    f"airlock_database_pool_utilisation_ratio {database_pool.utilisation_ratio:.6f}",
-                    "# HELP airlock_database_pool_checkout_timeouts_total Requests that could not obtain a database connection before pool timeout.",
+                    (
+                        "airlock_database_pool_utilisation_ratio "
+                        f"{database_pool.utilisation_ratio:.6f}"
+                    ),
+                    (
+                        "# HELP airlock_database_pool_checkout_timeouts_total "
+                        "Requests that timed out waiting for a database connection."
+                    ),
                     "# TYPE airlock_database_pool_checkout_timeouts_total counter",
-                    f"airlock_database_pool_checkout_timeouts_total {database_pool_checkout_timeouts}",
+                    (
+                        "airlock_database_pool_checkout_timeouts_total "
+                        f"{database_pool_checkout_timeouts}"
+                    ),
                 ]
             )
 
