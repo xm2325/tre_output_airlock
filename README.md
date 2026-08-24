@@ -56,7 +56,7 @@ flowchart LR
 | Identity resilience | 15-second default cache TTL capped by token `exp`, HMAC-SHA256 token/config digests, bounded LRU eviction, failure non-caching, per-token single-flight protection and IdP latency/cache telemetry |
 | Concurrency and workflow safety | Strong submission ETags and `If-Match`, database `row_version` compare-and-swap for claims and final review decisions, actor-scoped payload-bound upload idempotency with PostgreSQL unique-race recovery, transactional audit persistence, 30-minute review-claim leases and expired-claim recovery |
 | PostgreSQL / RDS | PostgreSQL-backed local stack, bounded pool controls and telemetry, explicit 503 checkout-timeout handling, keyset composite indexes, and PostgreSQL 16 migration/exhaustion/query-plan contracts |
-| AWS backend service | Terraform for API Gateway, private ALB, ECS Fargate API/publisher/worker roles, RDS PostgreSQL, encrypted EFS, SQS with DLQ/redrive, Secrets Manager, CloudWatch and least-privilege IAM; format/init/validate run in GitHub Actions |
+| AWS backend service | Terraform for API Gateway, private ALB, ECS Fargate API/publisher/worker roles, RDS PostgreSQL, encrypted EFS, SQS with DLQ/redrive, native CloudWatch backlog/oldest-age/DLQ alarms, Secrets Manager and least-privilege IAM; format/init/validate run in GitHub Actions |
 | ETL/ELT pipelines | FHIR, genomic manifest and VCF ingestion with stable run IDs and atomic publication |
 | Clinical and genomic data | Patient, condition, observation, specimen and genomic sample linkage |
 | Secure transfer | Aspera/Globus-style receipt with endpoints, bytes, retries, resume state and receiver-side SHA-256 |
@@ -112,7 +112,7 @@ The Airlock includes:
 - durable asynchronous scanning using PostgreSQL `ScanJob` + transactional `OutboxEvent`, an independent publisher and SQS consumer workers;
 - at-least-once delivery handling with expiring DB claims, retryable failures, DLQ/redrive infrastructure and duplicate-delivery suppression after durable completion;
 - React and TypeScript dashboard;
-- Prometheus-style HTTP, OIDC cache/single-flight, IdP latency and live PostgreSQL pool saturation/timeout metrics plus readiness checks;
+- Prometheus-style HTTP, OIDC cache/single-flight, IdP latency and live PostgreSQL pool saturation/timeout metrics plus a separate DB-backed async operations endpoint for durable backlog, stale leases, retries, completions and oldest-age state;
 - a nine-case synthetic benchmark;
 - Docker Compose integration and container builds.
 
@@ -194,7 +194,8 @@ Open:
 - dashboard: `http://localhost:5173`
 - API documentation: `http://localhost:8000/docs`
 - readiness: `http://localhost:8000/ready`
-- telemetry: `http://localhost:8000/metrics`
+- core telemetry: `http://localhost:8000/metrics`
+- durable async operations telemetry: `http://localhost:8000/metrics/async`
 
 Docker Compose uses PostgreSQL. The API container runs `alembic upgrade head` before startup by default. Multi-task service deployment can set `AIRLOCK_RUN_MIGRATIONS=false` and run one explicit migration task before updating the service.
 
@@ -214,7 +215,7 @@ The clinical–genomic workflow checks:
 
 The current Airlock backend contract checks:
 
-- **108 backend tests collected**: **106 passed + 2 environment-specific skipped** on the standard SQLite backend job with **90.50% coverage** against a 90% gate;
+- **111 backend tests collected**: **109 passed + 2 environment-specific skipped** on the standard SQLite backend job with **90.76% coverage** against a 90% gate;
 - Ruff and strict MyPy;
 - Python dependency audit;
 - cross-stack release-version consistency across runtime/package/lock metadata;
@@ -227,14 +228,15 @@ The current Airlock backend contract checks:
 - actor-scoped upload-idempotency regression paths covering exact replay, payload/metadata conflict **409**, cross-actor key reuse, raw-key non-persistence and a PostgreSQL barrier-forced concurrent first-request race that leaves one durable submission, one idempotency record and one quarantine file;
 - signed cursor regression paths covering three stable sort orders, equal-key tie-breaks, no duplicate/gap traversal, actor/filter binding, tamper rejection and bounded page size;
 - queued-upload API regression paths covering HTTP **202**, `QUEUED` state, atomic creation of one scan job plus one outbox event, exact idempotent replay without duplicate jobs, and payload-conflict **409**;
-- transactional-outbox/worker failure-window tests covering send-before-published-commit re-delivery, publisher send failure recovery, scan failure retry state, and message re-delivery after a durable completed scan without duplicated findings/audit;
+- transactional-outbox/worker failure-window tests covering send-before-published-commit re-delivery, publisher send failure recovery, scan failure retry state, message re-delivery after a durable completed scan without duplicated findings/audit, and stale `PROCESSING` lease reclamation;
+- durable async operations tests covering pending/publishing/published outbox state, queued/processing/completed jobs, stale publisher/worker leases, retry state and oldest backlog age while preserving the DB-independent core `/metrics` endpoint;
 - a separate PostgreSQL 16 + Moto SQS-compatible integration gate that creates queue/DLQ state through boto3, publishes a committed outbox event over HTTP, consumes it through the production SQS adapter, persists the scan result, deletes the receipt only after commit, and deliberately replays the same payload to verify idempotent completion;
 - PostgreSQL query-plan evidence that seeds 20,000 synthetic submissions, runs `ANALYZE`, and requires default-planner `EXPLAIN (FORMAT JSON)` plans for deep `newest` and `risk_desc` keyset queries to reference their corresponding composite cursor indexes;
 - frontend dependency audit, typecheck, unit tests and build;
 - Docker Compose configuration and full-stack route verification;
 - final container build.
 
-The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies Alembic through **`0004(head)`**, verifies the cursor-pagination composite indexes in `pg_indexes`, and runs the full backend contract against PostgreSQL. It also seeds **20,000 synthetic submissions**, runs `ANALYZE`, and checks default-planner `EXPLAIN (FORMAT JSON)` output for deep keyset queries: `newest` must use `ix_submissions_created_id` and `risk_desc` must use `ix_submissions_risk_cursor`. The complete plan JSON is retained as a CI artifact. Its pool contract still uses 3 persistent + 2 overflow connections and verifies saturation, explicit 503 behavior and recovery. Terraform format, `init -backend=false` and `validate` also run. These checks validate code, configuration and planner/index selection under the CI fixture; they do not demonstrate production latency, throughput, a live AWS deployment or a real IdP integration.
+The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies Alembic through **`0004(head)`**, verifies the cursor-pagination composite indexes in `pg_indexes`, and runs the full backend contract against PostgreSQL (**110 passed + 1 environment-specific skipped**). It also seeds **20,000 synthetic submissions**, runs `ANALYZE`, and checks default-planner `EXPLAIN (FORMAT JSON)` output for deep keyset queries: `newest` must use `ix_submissions_created_id` and `risk_desc` must use `ix_submissions_risk_cursor`. The complete plan JSON is retained as a CI artifact. Its pool contract still uses 3 persistent + 2 overflow connections and verifies saturation, explicit 503 behavior and recovery. Terraform format, `init -backend=false` and `validate` also cover native CloudWatch alarms for scan-queue backlog, oldest visible message age and DLQ depth. These checks validate code, configuration and planner/index selection under the CI fixture; they do not demonstrate production latency, throughput, a live AWS deployment or a real IdP integration.
 
 ## Repository structure
 
