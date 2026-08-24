@@ -103,7 +103,7 @@ jobs:
       - name: Apply Alembic migration to PostgreSQL
         run: |
           uv run alembic upgrade head
-          test "$(uv run alembic current | tr -d '[:space:]')" = "0003(head)"
+          test "$(uv run alembic current | tr -d '[:space:]')" = "0004(head)"
       - name: Verify cursor pagination indexes
         run: |
           uv run python - <<'PY'

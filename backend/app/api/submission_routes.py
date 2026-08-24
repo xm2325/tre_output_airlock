@@ -27,12 +27,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.api.common import (
-    _apply_automated_result,
-    _duplicate_finding,
-    _get_submission,
-    _request_id,
-)
+from app.api.common import _get_submission, _request_id
+from app.core.async_scan import load_async_scan_settings
 from app.core.auth import Actor, get_actor, require_roles
 from app.core.config import settings
 from app.core.http_preconditions import submission_etag
@@ -67,6 +63,12 @@ from app.schemas import (
 from app.services.audit import append_audit_event, verify_audit_chain
 from app.services.checker import ACTION_PRIORITY, OutputChecker, decision_from_findings
 from app.services.reports import build_report, verify_report
+from app.services.scan_jobs import enqueue_scan
+from app.services.scanning import (
+    ScanAuditContract,
+    ScanInputUnavailable,
+    run_submission_scan,
+)
 from app.services.storage import FileTooLargeError, quarantined_path, store_quarantined_file
 
 logger = logging.getLogger(__name__)
@@ -102,6 +104,7 @@ async def create_submission(
     else:
         raw_key = None
 
+    async_scan = load_async_scan_settings()
     normalised_project_code = project_code.strip()
     normalised_output_type = output_type.strip().upper()
     normalised_description = output_description.strip()
@@ -147,6 +150,8 @@ async def create_submission(
                 existing = _get_submission(db, existing_record.submission_id, actor)
                 response.headers["Idempotency-Replayed"] = "true"
                 response.headers["ETag"] = submission_etag(existing.id, existing.row_version)
+                if async_scan.mode == "queued" and existing.status in {"QUEUED", "SCANNING"}:
+                    response.status_code = status.HTTP_202_ACCEPTED
                 return existing
 
         submission = Submission(
@@ -184,39 +189,18 @@ async def create_submission(
             f"File stored in quarantine; size_bytes={stored.size_bytes}; sha256_recorded=true.",
             _request_id(request),
         )
-        submission.status = "SCANNING"
-        append_audit_event(
-            submission,
-            "SCAN_STARTED",
-            "rule-engine",
-            f"Policy={POLICY_VERSION}; deterministic checks started.",
-            _request_id(request),
-        )
-
-        context = FileContext(
-            path=stored.path,
-            filename=safe_filename,
-            content_type=submission.content_type,
-            size_bytes=stored.size_bytes,
-        )
-        result = checker.check(context)
-        findings = list(result.findings)
-        duplicate = _duplicate_finding(db, submission_id, stored.sha256)
-        if duplicate is not None:
-            findings.append(duplicate)
-        _apply_automated_result(submission, findings, result.policy_version)
-        append_audit_event(
-            submission,
-            "AUTOMATED_CHECK_COMPLETED",
-            "rule-engine",
-            (
-                f"Policy={submission.policy_version}; decision={submission.automated_decision}; "
-                f"risk_score={submission.risk_score:.3f}; findings={len(findings)}."
-            ),
-            _request_id(request),
-        )
         db.add(submission)
         db.flush()
+        if async_scan.mode == "queued":
+            enqueue_scan(db, submission, request_id=_request_id(request))
+        else:
+            run_submission_scan(
+                db,
+                submission,
+                checker=checker,
+                request_id=_request_id(request),
+                path=stored.path,
+            )
         if scope_key is not None and request_fingerprint is not None:
             db.add(
                 IdempotencyRecord(
@@ -247,6 +231,8 @@ async def create_submission(
             replayed = _get_submission(db, winner.submission_id, actor)
             response.headers["Idempotency-Replayed"] = "true"
             response.headers["ETag"] = submission_etag(replayed.id, replayed.row_version)
+            if async_scan.mode == "queued" and replayed.status in {"QUEUED", "SCANNING"}:
+                response.status_code = status.HTTP_202_ACCEPTED
             return replayed
     except HTTPException:
         db.rollback()
@@ -260,6 +246,8 @@ async def create_submission(
     latest = _get_submission(db, submission.id, actor)
     if raw_key is not None:
         response.headers["Idempotency-Replayed"] = "false"
+    if async_scan.mode == "queued":
+        response.status_code = status.HTTP_202_ACCEPTED
     response.headers["ETag"] = submission_etag(latest.id, latest.row_version)
     logger.info("Submission checked", extra={"submission_id": submission.id, "status_code": 201})
     return latest
@@ -274,8 +262,9 @@ def list_submissions(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=25, ge=1, le=100),
     decision: Literal["ALLOW", "REVIEW", "BLOCK"] | None = Query(default=None),
-    workflow_status: Literal["AWAITING_REVIEW", "COMPLETED", "QUARANTINED", "SCANNING"]
-    | None = Query(default=None),
+    workflow_status: Literal[
+        "AWAITING_REVIEW", "COMPLETED", "QUARANTINED", "QUEUED", "SCANNING"
+    ] | None = Query(default=None),
     project_code: str | None = Query(default=None, max_length=80),
     search: str | None = Query(default=None, max_length=120),
     sort: Literal["newest", "oldest", "risk_desc"] = Query(default="newest"),
@@ -355,41 +344,20 @@ def recheck_submission(
     db: Session = Depends(get_db),
 ) -> Submission:
     submission = _get_submission(db, submission_id, actor)
-    path = quarantined_path(submission.id, submission.filename)
-    if submission.file_deleted_at is not None or not path.exists():
-        raise HTTPException(status_code=409, detail="Quarantined file is no longer available.")
-
-    submission.status = "SCANNING"
-    submission.claimed_by = None
-    submission.claimed_at = None
-    append_audit_event(
-        submission, "RECHECK_STARTED", actor.name, f"Policy={POLICY_VERSION}.", _request_id(request)
-    )
-    result = checker.check(
-        FileContext(
-            path=path,
-            filename=submission.filename,
-            content_type=submission.content_type,
-            size_bytes=submission.size_bytes,
+    try:
+        run_submission_scan(
+            db,
+            submission,
+            checker=checker,
+            request_id=_request_id(request),
+            audit=ScanAuditContract(
+                started_event="RECHECK_STARTED",
+                started_actor=actor.name,
+                completed_event="AUTOMATED_RECHECK_COMPLETED",
+            ),
         )
-    )
-    findings = list(result.findings)
-    duplicate = _duplicate_finding(db, submission.id, submission.sha256)
-    if duplicate is not None:
-        findings.append(duplicate)
-    _apply_automated_result(submission, findings, result.policy_version)
-    append_audit_event(
-        submission,
-        "AUTOMATED_RECHECK_COMPLETED",
-        "rule-engine",
-        (
-            f"Policy={submission.policy_version}; "
-            f"decision={submission.automated_decision}; "
-            f"risk_score={submission.risk_score:.3f}; "
-            f"findings={len(findings)}."
-        ),
-        _request_id(request),
-    )
+    except ScanInputUnavailable as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     db.commit()
     return _get_submission(db, submission.id, actor)
 

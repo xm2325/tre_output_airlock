@@ -1,0 +1,124 @@
+name: Async SQS pipeline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "backend/**"
+      - "scripts/check_async_sqs_pipeline.py"
+      - ".github/workflows/async-sqs.yml"
+  pull_request:
+    paths:
+      - "backend/**"
+      - "scripts/check_async_sqs_pipeline.py"
+      - ".github/workflows/async-sqs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: async-sqs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  async-sqs-contract:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: airlock_async_test
+          POSTGRES_USER: airlock
+          POSTGRES_PASSWORD: airlock-test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U airlock -d airlock_async_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+      moto:
+        image: motoserver/moto:5.2.2
+        ports:
+          - 5000:5000
+    env:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: eu-west-2
+      AIRLOCK_DATABASE_URL: postgresql+psycopg://airlock:airlock-test@127.0.0.1:5432/airlock_async_test
+      AIRLOCK_DATABASE_POOL_SIZE: "3"
+      AIRLOCK_DATABASE_MAX_OVERFLOW: "2"
+      AIRLOCK_DATABASE_POOL_TIMEOUT_SECONDS: "1"
+      AIRLOCK_DATABASE_POOL_RECYCLE_SECONDS: "300"
+      AIRLOCK_QUARANTINE_DIR: /tmp/airlock-async-sqs-quarantine
+      AIRLOCK_AUTO_CREATE_SCHEMA: "false"
+      AIRLOCK_SCAN_MODE: queued
+      AIRLOCK_AWS_REGION: eu-west-2
+      AIRLOCK_SQS_ENDPOINT_URL: http://127.0.0.1:5000
+      AIRLOCK_SQS_WAIT_TIME_SECONDS: "1"
+      AIRLOCK_SQS_VISIBILITY_TIMEOUT_SECONDS: "10"
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --all-extras
+      - name: Lint async pipeline contract
+        run: uv run ruff check app ../scripts/check_async_sqs_pipeline.py
+      - name: Apply current schema to PostgreSQL
+        run: |
+          uv run alembic upgrade head
+          test "$(uv run alembic current | tr -d '[:space:]')" = "0004(head)"
+      - name: Create SQS queue and DLQ through boto3
+        run: |
+          uv run python - <<'PY'
+          import json
+          import os
+          import time
+
+          import boto3
+
+          sqs = boto3.client(
+              "sqs",
+              region_name=os.environ["AIRLOCK_AWS_REGION"],
+              endpoint_url=os.environ["AIRLOCK_SQS_ENDPOINT_URL"],
+          )
+          for attempt in range(30):
+              try:
+                  sqs.list_queues()
+                  break
+              except Exception:
+                  if attempt == 29:
+                      raise
+                  time.sleep(1)
+
+          dlq_url = sqs.create_queue(QueueName="airlock-scan-dlq")["QueueUrl"]
+          dlq_arn = sqs.get_queue_attributes(
+              QueueUrl=dlq_url,
+              AttributeNames=["QueueArn"],
+          )["Attributes"]["QueueArn"]
+          queue_url = sqs.create_queue(
+              QueueName="airlock-scan",
+              Attributes={
+                  "ReceiveMessageWaitTimeSeconds": "1",
+                  "VisibilityTimeout": "10",
+                  "RedrivePolicy": json.dumps(
+                      {"deadLetterTargetArn": dlq_arn, "maxReceiveCount": "3"}
+                  ),
+              },
+          )["QueueUrl"]
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"AIRLOCK_SCAN_QUEUE_URL={queue_url}\n")
+          print(f"created SQS-compatible scan queue with DLQ: {queue_url}")
+          PY
+      - name: Run committed-outbox to worker integration
+        run: PYTHONPATH=. uv run python ../scripts/check_async_sqs_pipeline.py
