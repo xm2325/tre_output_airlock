@@ -173,39 +173,46 @@ class ScanLeaseHeartbeat:
         self._stop.set()
         self._thread.join(timeout=self.settings.worker_heartbeat_interval_seconds + 1)
 
+    def renew_once(self) -> bool:
+        """Renew durable ownership first; SQS renewal is best-effort transport protection."""
+
+        try:
+            with self.session_factory() as db:
+                renewed = renew_scan_job_lease(db, self.job_id, self.claim_token)
+        except Exception:
+            logger.exception(
+                "Scan database lease heartbeat failed",
+                extra={"job_id": self.job_id, "disposition": "HEARTBEAT_ERROR"},
+            )
+            return True
+        if not renewed:
+            self._lost_lease.set()
+            logger.warning(
+                "Scan worker lost durable claim ownership",
+                extra={"job_id": self.job_id, "disposition": "LEASE_LOST"},
+            )
+            return False
+        try:
+            self.transport.change_visibility(
+                self.receipt_handle,
+                self.settings.visibility_timeout_seconds,
+            )
+        except Exception:
+            # The durable claim token still protects writes if SQS visibility renewal fails.
+            logger.exception(
+                "SQS visibility heartbeat failed",
+                extra={"job_id": self.job_id, "disposition": "VISIBILITY_RENEWAL_FAILED"},
+            )
+        return True
+
     def _run(self) -> None:
         interval = self.settings.worker_heartbeat_interval_seconds
         while not self._stop.wait(interval):
-            try:
-                with self.session_factory() as db:
-                    renewed = renew_scan_job_lease(db, self.job_id, self.claim_token)
-            except Exception:
-                logger.exception(
-                    "Scan database lease heartbeat failed",
-                    extra={"job_id": self.job_id, "disposition": "HEARTBEAT_ERROR"},
-                )
-                continue
-            if not renewed:
-                self._lost_lease.set()
-                logger.warning(
-                    "Scan worker lost durable claim ownership",
-                    extra={"job_id": self.job_id, "disposition": "LEASE_LOST"},
-                )
+            if not self.renew_once():
                 return
-            try:
-                self.transport.change_visibility(
-                    self.receipt_handle,
-                    self.settings.visibility_timeout_seconds,
-                )
-            except Exception:
-                # The durable claim token still protects writes if SQS visibility renewal fails.
-                logger.exception(
-                    "SQS visibility heartbeat failed",
-                    extra={"job_id": self.job_id, "disposition": "VISIBILITY_RENEWAL_FAILED"},
-                )
 
 
-def _process_claimed_scan_message(
+def process_claimed_scan_message(
     db: Session,
     message: ScanMessage,
     claim_token: str,
@@ -324,7 +331,7 @@ def process_scan_message(
         return "IN_PROGRESS"
     if claim.claim_token is None:
         raise RuntimeError("Claimed scan job did not produce an ownership token")
-    return _process_claimed_scan_message(db, message, claim.claim_token, checker=checker)
+    return process_claimed_scan_message(db, message, claim.claim_token, checker=checker)
 
 
 def run_worker_once(
@@ -374,7 +381,7 @@ def run_worker_once(
         heartbeat.start()
         try:
             with session_factory() as db:
-                disposition = _process_claimed_scan_message(
+                disposition = process_claimed_scan_message(
                     db,
                     message,
                     claim.claim_token,
