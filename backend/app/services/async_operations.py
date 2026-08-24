@@ -14,11 +14,13 @@ from app.models import OutboxEvent, ScanJob
 class AsyncOperationsSnapshot:
     outbox_pending: int
     outbox_publishing: int
+    outbox_published: int
     outbox_stale_publishing: int
     outbox_retry_events: int
     outbox_oldest_unpublished_age_seconds: float
     scan_queued: int
     scan_processing: int
+    scan_completed: int
     scan_stale_processing: int
     scan_retry_jobs: int
     scan_retryable_failures: int
@@ -64,6 +66,7 @@ def collect_async_operations_snapshot(
     return AsyncOperationsSnapshot(
         outbox_pending=_count(db, OutboxEvent, OutboxEvent.status == "PENDING"),
         outbox_publishing=_count(db, OutboxEvent, OutboxEvent.status == "PUBLISHING"),
+        outbox_published=_count(db, OutboxEvent, OutboxEvent.status == "PUBLISHED"),
         outbox_stale_publishing=_count(
             db,
             OutboxEvent,
@@ -74,6 +77,7 @@ def collect_async_operations_snapshot(
         outbox_oldest_unpublished_age_seconds=_age_seconds(oldest_unpublished, current),
         scan_queued=_count(db, ScanJob, ScanJob.status == "QUEUED"),
         scan_processing=_count(db, ScanJob, ScanJob.status == "PROCESSING"),
+        scan_completed=_count(db, ScanJob, ScanJob.status == "COMPLETED"),
         scan_stale_processing=_count(
             db,
             ScanJob,
@@ -104,6 +108,11 @@ def prometheus_async_operations(snapshot: AsyncOperationsSnapshot) -> str:
             snapshot.outbox_publishing,
         ),
         (
+            "airlock_async_outbox_published",
+            "Durable outbox events marked published.",
+            snapshot.outbox_published,
+        ),
+        (
             "airlock_async_outbox_stale_publishing",
             "Publisher leases old enough to be reclaimed.",
             snapshot.outbox_stale_publishing,
@@ -129,6 +138,11 @@ def prometheus_async_operations(snapshot: AsyncOperationsSnapshot) -> str:
             snapshot.scan_processing,
         ),
         (
+            "airlock_async_scan_completed",
+            "Durable scan jobs completed successfully.",
+            snapshot.scan_completed,
+        ),
+        (
             "airlock_async_scan_stale_processing",
             "Worker leases old enough to be reclaimed.",
             snapshot.scan_stale_processing,
@@ -140,7 +154,7 @@ def prometheus_async_operations(snapshot: AsyncOperationsSnapshot) -> str:
         ),
         (
             "airlock_async_scan_retryable_failures",
-            "Queued scan jobs carrying a retryable failure reason.",
+            "Queued scan jobs carrying a recorded retryable failure reason.",
             snapshot.scan_retryable_failures,
         ),
         (
