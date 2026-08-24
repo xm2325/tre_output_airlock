@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -17,6 +18,8 @@ from app.services.scan_jobs import ScanMessage
 from app.services.scanning import run_submission_scan
 from app.services.sqs_transport import AwsSqsTransport, QueueTransport
 
+logger = logging.getLogger(__name__)
+
 ClaimDisposition = Literal["CLAIMED", "ALREADY_COMPLETED", "IN_PROGRESS"]
 ProcessDisposition = Literal["PROCESSED", "ALREADY_COMPLETED", "IN_PROGRESS"]
 
@@ -30,6 +33,16 @@ class WorkerBatchResult:
 
 def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _log_context(message: ScanMessage, disposition: str) -> dict[str, str | None]:
+    return {
+        "request_id": message.request_id,
+        "submission_id": message.submission_id,
+        "job_id": message.job_id,
+        "event_id": message.event_id,
+        "disposition": disposition,
+    }
 
 
 def claim_scan_job(
@@ -82,8 +95,16 @@ def process_scan_message(
     message = ScanMessage.from_json(payload)
     claim = claim_scan_job(db, message, settings)
     if claim == "ALREADY_COMPLETED":
+        logger.info(
+            "Async scan message already completed",
+            extra=_log_context(message, "ALREADY_COMPLETED"),
+        )
         return "ALREADY_COMPLETED"
     if claim == "IN_PROGRESS":
+        logger.info(
+            "Async scan message already has an active lease",
+            extra=_log_context(message, "IN_PROGRESS"),
+        )
         return "IN_PROGRESS"
 
     job = db.get(ScanJob, message.job_id)
@@ -96,13 +117,17 @@ def process_scan_message(
             db,
             submission,
             checker=checker or OutputChecker(),
-            request_id=None,
+            request_id=message.request_id,
         )
         job.status = "COMPLETED"
         job.completed_at = datetime.now(UTC)
         job.claimed_at = None
         job.last_error = None
         db.commit()
+        logger.info(
+            "Async scan message processed",
+            extra=_log_context(message, "PROCESSED"),
+        )
         return "PROCESSED"
     except Exception as exc:
         db.rollback()
@@ -119,9 +144,13 @@ def process_scan_message(
                 "SCAN_ATTEMPT_FAILED",
                 "scan-worker",
                 f"error_type={type(exc).__name__}; retryable=true.",
-                None,
+                message.request_id,
             )
         db.commit()
+        logger.exception(
+            "Async scan message processing failed",
+            extra=_log_context(message, "FAILED"),
+        )
         raise
 
 
