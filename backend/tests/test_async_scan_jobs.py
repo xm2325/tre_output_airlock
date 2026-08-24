@@ -121,7 +121,7 @@ def test_enqueue_scan_commit_persists_submission_job_outbox_and_audit() -> None:
 
 
 def test_enqueue_scan_generates_correlation_when_no_http_request_id_exists() -> None:
-    submission = make_submission("async-submission-generated-correlation")
+    submission = make_submission("async-generated-correlation")
     with SessionLocal() as db:
         db.add(submission)
         _, outbox = enqueue_scan(db, submission, request_id=None)
