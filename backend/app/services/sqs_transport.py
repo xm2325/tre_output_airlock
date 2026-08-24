@@ -22,6 +22,8 @@ class QueueTransport(Protocol):
         visibility_timeout_seconds: int,
     ) -> list[ReceivedQueueMessage]: ...
 
+    def change_visibility(self, receipt_handle: str, visibility_timeout_seconds: int) -> None: ...
+
     def delete(self, receipt_handle: str) -> None: ...
 
 
@@ -86,6 +88,13 @@ class AwsSqsTransport:
                 )
             )
         return result
+
+    def change_visibility(self, receipt_handle: str, visibility_timeout_seconds: int) -> None:
+        self.client.change_message_visibility(
+            QueueUrl=self.queue_url,
+            ReceiptHandle=receipt_handle,
+            VisibilityTimeout=visibility_timeout_seconds,
+        )
 
     def delete(self, receipt_handle: str) -> None:
         self.client.delete_message(QueueUrl=self.queue_url, ReceiptHandle=receipt_handle)
