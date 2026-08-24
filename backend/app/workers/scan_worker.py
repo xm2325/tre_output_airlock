@@ -122,7 +122,7 @@ def renew_scan_job_lease(
     """Renew a lease only while the caller still owns the durable claim token."""
 
     current = now or datetime.now(UTC)
-    result = db.execute(
+    renewed_job_id = db.scalar(
         update(ScanJob)
         .where(
             ScanJob.id == job_id,
@@ -130,9 +130,10 @@ def renew_scan_job_lease(
             ScanJob.claim_token == claim_token,
         )
         .values(claimed_at=current)
+        .returning(ScanJob.id)
         .execution_options(synchronize_session=False)
     )
-    if result.rowcount != 1:
+    if renewed_job_id != job_id:
         db.rollback()
         return False
     db.commit()
@@ -241,7 +242,7 @@ def process_claimed_scan_message(
             request_id=message.request_id,
         )
         completed_at = datetime.now(UTC)
-        completion = db.execute(
+        completed_job_id = db.scalar(
             update(ScanJob)
             .where(
                 ScanJob.id == message.job_id,
@@ -255,9 +256,10 @@ def process_claimed_scan_message(
                 claim_token=None,
                 last_error=None,
             )
+            .returning(ScanJob.id)
             .execution_options(synchronize_session=False)
         )
-        if completion.rowcount != 1:
+        if completed_job_id != message.job_id:
             db.rollback()
             logger.warning(
                 "Stale scan worker was fenced before commit",
@@ -272,7 +274,7 @@ def process_claimed_scan_message(
         return "PROCESSED"
     except Exception as exc:
         db.rollback()
-        failure = db.execute(
+        failed_job_id = db.scalar(
             update(ScanJob)
             .where(
                 ScanJob.id == message.job_id,
@@ -285,9 +287,10 @@ def process_claimed_scan_message(
                 claim_token=None,
                 last_error=str(exc)[:1000],
             )
+            .returning(ScanJob.id)
             .execution_options(synchronize_session=False)
         )
-        if failure.rowcount == 1:
+        if failed_job_id == message.job_id:
             failed_submission = db.get(Submission, message.submission_id)
             if failed_submission is not None and failed_submission.status == "SCANNING":
                 failed_submission.status = "QUEUED"
