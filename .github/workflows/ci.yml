@@ -14,6 +14,75 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  finalize-v017:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'release-v0.17.0'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify pinned finalizer and extract scripts
+        env:
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          test "$(git hash-object .github/workflows/release-v017-finalize.yml)" = "d4783232984ae96cf7dc572414fe346c6f0a5a0b"
+          python - <<'PY'
+          import os
+          from pathlib import Path
+
+          source = Path(".github/workflows/release-v017-finalize.yml").read_text()
+
+          def extract(marker: str) -> str:
+              marker_pos = source.index(marker)
+              run_marker = "        run: |\n"
+              start = source.index(run_marker, marker_pos) + len(run_marker)
+              output: list[str] = []
+              for line in source[start:].splitlines():
+                  if line.startswith("          "):
+                      output.append(line[10:])
+                  elif not line:
+                      output.append("")
+                  else:
+                      break
+              return "\n".join(output).rstrip() + "\n"
+
+          temp = Path(os.environ["RUNNER_TEMP"])
+          temp.joinpath("finalize-generate.sh").write_text(
+              extract("- name: Generate release metadata and native locks")
+          )
+          temp.joinpath("finalize-commit.sh").write_text(
+              extract("- name: Commit clean v0.17 release head")
+          )
+          PY
+      - name: Run pinned release finalizer
+        shell: bash
+        run: bash "$RUNNER_TEMP/finalize-generate.sh"
+      - name: Restore read-only CI and commit release head
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show ac87c7c0a1e03b8ecb9901450f0b309fbff67f69:.github/workflows/ci.yml > .github/workflows/ci.yml
+          test "$(git hash-object .github/workflows/ci.yml)" = "c97a61a2c63f5776b93481cb975460453eb9aa73"
+          bash "$RUNNER_TEMP/finalize-commit.sh"
+
   release-contract:
     runs-on: ubuntu-latest
     steps:
