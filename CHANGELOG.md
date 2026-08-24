@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.17.0 — 2026-08-24
+
+### Async request correlation and troubleshooting
+
+- Promoted new asynchronous scan messages to schema v2 carrying the originating request/correlation ID from HTTP or a generated non-HTTP correlation value.
+- Preserved rolling-deployment compatibility by continuing to consume legacy schema v1 queue messages that predate persisted request correlation.
+- Propagated correlation into successful and failed worker audit events and structured worker logs with request, submission, job, outbox-event and disposition context.
+- Extended retry and duplicate-delivery tests to prove the same correlation survives publisher redelivery, scan failure/retry and completed-message replay without duplicate completion audit.
+- Extended the PostgreSQL 16 + SQS-compatible boto3 integration gate to verify committed outbox -> SQS -> worker -> correlated durable audit -> duplicate-safe replay.
+- Expanded the backend contract to 115 collected tests: 113 passed with two environment-specific skips at 90.81% coverage on the standard job; PostgreSQL passes 114 with one environment-specific skip.
+
+### Boundary
+
+- This is application-level request correlation for troubleshooting, not a distributed-tracing, OpenTelemetry, AWS X-Ray or W3C `traceparent` implementation. Legacy v1 messages remain consumable but cannot reconstruct a request ID that was never persisted.
+
 ## 0.16.0 — 2026-08-24
 
 ### Async operations and recovery
