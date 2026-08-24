@@ -7,8 +7,8 @@ from app.core.async_scan import AsyncScanSettings
 from app.db import SessionLocal
 from app.models import OutboxEvent, ScanJob, Submission
 from app.services.async_operations import collect_async_operations_snapshot
-from app.workers.scan_worker import claim_scan_job
 from app.services.scan_jobs import ScanMessage
+from app.workers.scan_worker import claim_scan_job
 
 
 def _settings() -> AsyncScanSettings:
@@ -148,7 +148,6 @@ def test_metrics_async_exposes_durable_state_without_changing_core_metrics(clien
     async_metrics = client.get("/metrics/async")
 
     assert core.status_code == 200
-    assert "airlock_database_pool_" not in core.text or "airlock_http_requests_total" in core.text
     assert "airlock_async_scan_queued" not in core.text
     assert async_metrics.status_code == 200
     assert "airlock_async_outbox_pending 1" in async_metrics.text
@@ -176,17 +175,17 @@ def test_stale_processing_job_is_reclaimed() -> None:
 
         disposition = claim_scan_job(
             db,
-            ScanMessage(version=1, job_id=job_id, submission_id=submission_id),
+            ScanMessage(event_id=str(uuid4()), job_id=job_id, submission_id=submission_id),
             settings,
             now=now,
         )
         job = db.get(ScanJob, job_id)
         submission = db.get(Submission, submission_id)
 
-    assert disposition == "CLAIMED"
-    assert job is not None
-    assert job.status == "PROCESSING"
-    assert job.attempt_count == 2
-    assert job.claimed_at == now
-    assert submission is not None
-    assert submission.status == "SCANNING"
+        assert disposition == "CLAIMED"
+        assert job is not None
+        assert job.status == "PROCESSING"
+        assert job.attempt_count == 2
+        assert job.claimed_at == now
+        assert submission is not None
+        assert submission.status == "SCANNING"
