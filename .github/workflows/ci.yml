@@ -60,13 +60,21 @@ jobs:
                   output.append(line[10:] if line.startswith("          ") else line)
               return "\n".join(output).rstrip() + "\n"
 
-          temp = Path(os.environ["RUNNER_TEMP"])
-          temp.joinpath("finalize-generate.sh").write_text(
-              extract(
-                  "- name: Generate release metadata and native locks",
-                  "\n      - name: Commit clean v0.17 release head",
-              )
+          generate = extract(
+              "- name: Generate release metadata and native locks",
+              "\n      - name: Commit clean v0.17 release head",
           )
+          old_delete = "git rm .github/workflows/release-v017-finalize.yml"
+          if generate.count(old_delete) != 1:
+              raise SystemExit("unexpected pinned finalizer delete command")
+          generate = generate.replace(
+              old_delete,
+              "rm -f .github/workflows/release-v017-finalize.yml",
+              1,
+          )
+
+          temp = Path(os.environ["RUNNER_TEMP"])
+          temp.joinpath("finalize-generate.sh").write_text(generate)
           temp.joinpath("finalize-commit.sh").write_text(
               extract("- name: Commit clean v0.17 release head")
           )
