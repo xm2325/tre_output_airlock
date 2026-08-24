@@ -217,7 +217,10 @@ class LeaseStealingChecker(OutputChecker):
         )
 
 
-@pytest.mark.skipif(engine.dialect.name != "postgresql", reason="requires concurrent PG transactions")
+@pytest.mark.skipif(
+    engine.dialect.name != "postgresql",
+    reason="requires concurrent PG transactions",
+)
 def test_postgres_stale_worker_is_fenced_after_scan_before_commit() -> None:
     settings = _settings()
     job_id, message = _create_job()
@@ -252,4 +255,5 @@ def test_postgres_stale_worker_is_fenced_after_scan_before_commit() -> None:
         event_types = [event.event_type for event in submission.audit_events]
         assert "SCAN_STARTED" not in event_types
         assert "AUTOMATED_CHECK_COMPLETED" not in event_types
-        assert db.scalar(select(ScanJob.claim_token).where(ScanJob.id == job_id)) == replacement_token
+        stored_token = db.scalar(select(ScanJob.claim_token).where(ScanJob.id == job_id))
+        assert stored_token == replacement_token
