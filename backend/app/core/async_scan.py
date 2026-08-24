@@ -34,6 +34,12 @@ class AsyncScanSettings:
     receive_wait_seconds: int
     visibility_timeout_seconds: int
 
+    @property
+    def worker_heartbeat_interval_seconds(self) -> int:
+        """Renew both leases well before either ownership window can expire."""
+
+        return max(1, min(self.worker_claim_ttl_seconds, self.visibility_timeout_seconds) // 3)
+
 
 def load_async_scan_settings() -> AsyncScanSettings:
     endpoint = os.getenv("AIRLOCK_SQS_ENDPOINT_URL", "").strip()
