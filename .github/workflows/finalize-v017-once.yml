@@ -1,0 +1,136 @@
+name: Finalize v0.17 release once
+
+on:
+  push:
+    branches: [async-correlation-v0.17]
+    paths:
+      - ".finalize-v017-trigger"
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: async-correlation-v0.17
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Update release metadata and evidence
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import json
+          import re
+
+          version = "0.17.0"
+          Path("VERSION").write_text(version + "\n")
+
+          p = Path("backend/app/version.py")
+          text = p.read_text().replace('__version__ = "0.16.0"', '__version__ = "0.17.0"')
+          p.write_text(text)
+
+          p = Path("backend/pyproject.toml")
+          text = p.read_text()
+          text = re.sub(r'(?m)^version = "0\.16\.0"$', 'version = "0.17.0"', text, count=1)
+          p.write_text(text)
+
+          p = Path("frontend/package.json")
+          data = json.loads(p.read_text())
+          data["version"] = version
+          p.write_text(json.dumps(data, indent=2) + "\n")
+
+          p = Path("CHANGELOG.md")
+          text = p.read_text()
+          entry = '''## 0.17.0 — 2026-08-24
+
+### Async request correlation and troubleshooting
+
+- Promoted new asynchronous scan messages to schema v2 carrying the originating request/correlation ID from HTTP or a generated non-HTTP correlation value.
+- Preserved rolling-deployment compatibility by continuing to consume legacy schema v1 queue messages that predate persisted request correlation.
+- Propagated correlation into successful and failed worker audit events and structured worker logs with request, submission, job, outbox-event and disposition context.
+- Extended retry and duplicate-delivery tests to prove the same correlation survives publisher redelivery, scan failure/retry and completed-message replay without duplicate completion audit.
+- Extended the PostgreSQL 16 + SQS-compatible boto3 integration gate to verify committed outbox -> SQS -> worker -> correlated durable audit -> duplicate-safe replay.
+- Expanded the backend contract to 115 collected tests: 113 passed with two environment-specific skips at 90.81% coverage on the standard job; PostgreSQL passes 114 with one environment-specific skip.
+
+### Boundary
+
+- This is application-level request correlation for troubleshooting, not a distributed-tracing, OpenTelemetry, AWS X-Ray or `traceparent` implementation. Legacy v1 messages remain consumable but cannot reconstruct a request ID that was never persisted.
+
+'''
+          if "## 0.17.0" not in text:
+              text = text.replace("# Changelog\n\n", "# Changelog\n\n" + entry, 1)
+          p.write_text(text)
+
+          p = Path("README.md")
+          text = p.read_text()
+          text = text.replace(
+              "| AWS backend service | Terraform for API Gateway, private ALB, ECS Fargate API/publisher/worker roles, RDS PostgreSQL, encrypted EFS, SQS with DLQ/redrive, native CloudWatch backlog/oldest-age/DLQ alarms, Secrets Manager and least-privilege IAM; format/init/validate run in GitHub Actions |",
+              "| AWS backend service | Terraform for API Gateway, private ALB, ECS Fargate API/publisher/worker roles, RDS PostgreSQL, encrypted EFS, SQS with DLQ/redrive, native CloudWatch backlog/oldest-age/DLQ alarms, Secrets Manager and least-privilege IAM; format/init/validate run in GitHub Actions |\n| Async troubleshooting | Versioned scan-message request correlation from HTTP/outbox through SQS workers into durable audit, structured request/submission/job/event/disposition logs, retry/duplicate preservation and legacy-v1 rolling-deployment compatibility |",
+          )
+          text = text.replace(
+              "- at-least-once delivery handling with expiring DB claims, retryable failures, DLQ/redrive infrastructure and duplicate-delivery suppression after durable completion;",
+              "- at-least-once delivery handling with expiring DB claims, retryable failures, DLQ/redrive infrastructure and duplicate-delivery suppression after durable completion;\n- schema-v2 asynchronous request correlation from enqueue/outbox through worker success/failure audit and structured logs, while retaining schema-v1 consumer compatibility for rolling deployments;",
+          )
+          text = text.replace(
+              "- **111 backend tests collected**: **109 passed + 2 environment-specific skipped** on the standard SQLite backend job with **90.76% coverage** against a 90% gate;",
+              "- **115 backend tests collected**: **113 passed + 2 environment-specific skipped** on the standard SQLite backend job with **90.81% coverage** against a 90% gate;",
+          )
+          text = text.replace(
+              "- transactional-outbox/worker failure-window tests covering send-before-published-commit re-delivery, publisher send failure recovery, scan failure retry state, message re-delivery after a durable completed scan without duplicated findings/audit, and stale `PROCESSING` lease reclamation;",
+              "- transactional-outbox/worker failure-window tests covering send-before-published-commit re-delivery, publisher send failure recovery, scan failure retry state, message re-delivery after a durable completed scan without duplicated findings/audit, stale `PROCESSING` lease reclamation, and request-correlation preservation across retries/duplicate delivery;\n- versioned async message-contract tests covering schema-v2 request correlation plus legacy schema-v1 consumption during rolling deployment;",
+          )
+          text = text.replace(
+              "publishes a committed outbox event over HTTP, consumes it through the production SQS adapter, persists the scan result, deletes the receipt only after commit, and deliberately replays the same payload to verify idempotent completion;",
+              "publishes a committed outbox event over HTTP, consumes it through the production SQS adapter, preserves one request correlation ID into the durable completion audit, deletes the receipt only after commit, and deliberately replays the same payload to verify idempotent completion;",
+          )
+          text = text.replace(
+              "against PostgreSQL (**110 passed + 1 environment-specific skipped**).",
+              "against PostgreSQL (**114 passed + 1 environment-specific skipped**).",
+          )
+          p.write_text(text)
+
+          p = Path("docs/production-readiness.md")
+          text = p.read_text()
+          text = text.replace(
+              "| Audit | request IDs, hash-linked events, signed reports and atomic review-claim/audit persistence | central append-only log, managed signing key, independent verification and recovery testing |",
+              "| Audit | request IDs, hash-linked events, signed reports, atomic review-claim/audit persistence and schema-v2 async request correlation into worker success/failure audit | central append-only log, managed signing key, independent verification and recovery testing |",
+          )
+          text = text.replace(
+              "| Operations | DB-independent core Prometheus telemetry, DB-backed durable async backlog/stale-lease/retry/completion/oldest-age metrics, OIDC/cache/IdP and PostgreSQL pool telemetry, plus native CloudWatch SQS backlog/oldest-age/DLQ alarms |",
+              "| Operations | DB-independent core Prometheus telemetry, DB-backed durable async backlog/stale-lease/retry/completion/oldest-age metrics, correlated worker JSON logs carrying request/submission/job/event/disposition context, OIDC/cache/IdP and PostgreSQL pool telemetry, plus native CloudWatch SQS backlog/oldest-age/DLQ alarms |",
+          )
+          marker = "Delivery is intentionally **at-least-once**."
+          paragraph = "New queue payloads use schema v2 and carry the request/correlation ID that originated at the HTTP boundary, or a generated correlation value for non-HTTP enqueue paths. The worker propagates that value into successful and failed audit events and structured logs alongside submission, job, outbox event and processing disposition. Consumers continue to accept schema-v1 messages during rolling deployment; those legacy messages use `request_id=None` because a correlation value that was never persisted cannot be reconstructed. This is application-level troubleshooting correlation, not an OpenTelemetry, AWS X-Ray or W3C `traceparent` implementation.\n\n"
+          if paragraph not in text:
+              text = text.replace(marker, paragraph + marker, 1)
+          p.write_text(text)
+          PY
+
+          cd backend
+          uv lock
+          uv sync --frozen --all-extras
+          cd ../frontend
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm ci --ignore-scripts --no-audit --no-fund
+          cd ..
+          git diff --check
+
+      - name: Commit v0.17 release
+        run: |
+          rm -f .finalize-v017-trigger .github/workflows/finalize-v017-once.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "release: finalize v0.17.0 correlation evidence"
+          git push origin HEAD:async-correlation-v0.17
