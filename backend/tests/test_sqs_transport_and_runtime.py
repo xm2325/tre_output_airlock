@@ -19,6 +19,7 @@ class FakeSqsClient:
     def __init__(self) -> None:
         self.sent: list[dict[str, str]] = []
         self.deleted: list[dict[str, str]] = []
+        self.visibility_changes: list[dict[str, Any]] = []
         self.receive_response: dict[str, Any] = {"Messages": []}
         self.send_response: dict[str, Any] = {"MessageId": "message-1"}
 
@@ -29,6 +30,9 @@ class FakeSqsClient:
     def receive_message(self, **kwargs: Any) -> dict[str, Any]:
         self.receive_kwargs = kwargs
         return self.receive_response
+
+    def change_message_visibility(self, **kwargs: Any) -> None:
+        self.visibility_changes.append(kwargs)
 
     def delete_message(self, **kwargs: str) -> None:
         self.deleted.append(kwargs)
@@ -51,6 +55,9 @@ class FakeTransport:
     ) -> list[Any]:
         del max_messages, wait_seconds, visibility_timeout_seconds
         return []
+
+    def change_visibility(self, receipt_handle: str, visibility_timeout_seconds: int) -> None:
+        del receipt_handle, visibility_timeout_seconds
 
     def delete(self, receipt_handle: str) -> None:
         del receipt_handle
@@ -96,6 +103,7 @@ def test_async_settings_defaults_and_fail_closed(monkeypatch: pytest.MonkeyPatch
     assert settings.aws_region == "eu-west-2"
     assert settings.endpoint_url is None
     assert settings.outbox_batch_size == 10
+    assert settings.worker_heartbeat_interval_seconds == 40
 
     monkeypatch.setenv("AIRLOCK_SCAN_MODE", "invalid")
     with pytest.raises(ValueError, match="AIRLOCK_SCAN_MODE"):
@@ -151,6 +159,15 @@ def test_sqs_transport_builds_client_and_round_trips_messages(
         "WaitTimeSeconds": 4,
         "VisibilityTimeout": 30,
     }
+
+    transport.change_visibility("receipt-1", 45)
+    assert fake.visibility_changes == [
+        {
+            "QueueUrl": "https://sqs.example/scan",
+            "ReceiptHandle": "receipt-1",
+            "VisibilityTimeout": 45,
+        }
+    ]
 
     transport.delete("receipt-1")
     assert fake.deleted == [
