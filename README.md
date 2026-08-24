@@ -56,7 +56,7 @@ flowchart LR
 | Identity resilience | 15-second default cache TTL capped by token `exp`, HMAC-SHA256 token/config digests, bounded LRU eviction, failure non-caching, per-token single-flight protection and IdP latency/cache telemetry |
 | Concurrency and workflow safety | Strong submission ETags and `If-Match`, database `row_version` compare-and-swap for claims and final review decisions, actor-scoped payload-bound upload idempotency with PostgreSQL unique-race recovery, transactional audit persistence, 30-minute review-claim leases and expired-claim recovery |
 | PostgreSQL / RDS | PostgreSQL-backed local stack, bounded pool controls and telemetry, explicit 503 checkout-timeout handling, keyset composite indexes, and PostgreSQL 16 migration/exhaustion/query-plan contracts |
-| AWS backend service | Terraform for API Gateway, private ALB, ECS Fargate, RDS PostgreSQL, encrypted EFS, Secrets Manager, CloudWatch and constrained IAM roles; format/init/validate run in GitHub Actions |
+| AWS backend service | Terraform for API Gateway, private ALB, ECS Fargate API/publisher/worker roles, RDS PostgreSQL, encrypted EFS, SQS with DLQ/redrive, Secrets Manager, CloudWatch and least-privilege IAM; format/init/validate run in GitHub Actions |
 | ETL/ELT pipelines | FHIR, genomic manifest and VCF ingestion with stable run IDs and atomic publication |
 | Clinical and genomic data | Patient, condition, observation, specimen and genomic sample linkage |
 | Secure transfer | Aspera/Globus-style receipt with endpoints, bytes, retries, resume state and receiver-side SHA-256 |
@@ -109,6 +109,8 @@ The Airlock includes:
 - versioned release policy and policy workload simulation;
 - HMAC-signed reports and SHA-256-linked audit events;
 - PostgreSQL, Alembic migrations and FastAPI;
+- durable asynchronous scanning using PostgreSQL `ScanJob` + transactional `OutboxEvent`, an independent publisher and SQS consumer workers;
+- at-least-once delivery handling with expiring DB claims, retryable failures, DLQ/redrive infrastructure and duplicate-delivery suppression after durable completion;
 - React and TypeScript dashboard;
 - Prometheus-style HTTP, OIDC cache/single-flight, IdP latency and live PostgreSQL pool saturation/timeout metrics plus readiness checks;
 - a nine-case synthetic benchmark;
@@ -122,13 +124,16 @@ The backend service has a separate Terraform reference path:
 API Gateway HTTP API
     -> VPC Link
     -> internal ALB
-    -> private ECS Fargate tasks
-         -> private RDS PostgreSQL
+    -> private ECS Fargate API tasks
+         -> private RDS PostgreSQL (submission + transactional outbox)
          -> encrypted EFS working-file volume
          -> OAuth2/OIDC token introspection over HTTPS
+
+Independent ECS publisher -> committed outbox -> SQS scan queue -> ECS scan workers
+                                                     -> DLQ after redrive limit
 ```
 
-Runtime database credentials, the IdP client secret and report-signing material are injected through Secrets Manager. The service task has no public IP. The application task role intentionally has no AWS control-plane permissions because the current FastAPI process does not call AWS APIs directly. The ECS reference passes both the bounded OIDC cache settings and the PostgreSQL pool budget to each task. The default application budget is 5 persistent connections plus 5 overflow connections per task; production sizing must account for task count and database headroom. See [`infra/aws/backend_service/README.md`](infra/aws/backend_service/README.md) and [`docs/identity-and-backend-platform.md`](docs/identity-and-backend-platform.md).
+Runtime database credentials, the IdP client secret and report-signing material are injected through Secrets Manager. The service task has no public IP. The API task role intentionally has no SQS permissions: uploads commit submission, job and outbox state to PostgreSQL only. A separate publisher role can only send to the scan queue, while the worker role is limited to SQS consume/acknowledgement operations. This keeps the database transaction as the durable hand-off boundary rather than performing a fragile DB-plus-SQS dual write in the request path. The ECS reference passes both the bounded OIDC cache settings and the PostgreSQL pool budget to each task. The default application budget is 5 persistent connections plus 5 overflow connections per task; production sizing must account for task count and database headroom. See [`infra/aws/backend_service/README.md`](infra/aws/backend_service/README.md) and [`docs/identity-and-backend-platform.md`](docs/identity-and-backend-platform.md).
 
 ## Browser-only Airlock demo
 
@@ -209,7 +214,7 @@ The clinical–genomic workflow checks:
 
 The current Airlock backend contract checks:
 
-- **92 backend tests collected**: **90 passed + 2 PostgreSQL-only skipped** on the standard SQLite backend job with **90.23% coverage** against a 90% gate;
+- **108 backend tests collected**: **106 passed + 2 environment-specific skipped** on the standard SQLite backend job with **90.50% coverage** against a 90% gate;
 - Ruff and strict MyPy;
 - Python dependency audit;
 - cross-stack release-version consistency across runtime/package/lock metadata;
@@ -221,12 +226,15 @@ The current Airlock backend contract checks:
 - HTTP optimistic-concurrency regression paths covering current ETag publication, `If-Match`-only review, stale-header **412**, missing-precondition **428**, contradictory header/body **400**, weak/wildcard rejection, database CAS stale-write rejection and rollback of the decision when audit persistence fails;
 - actor-scoped upload-idempotency regression paths covering exact replay, payload/metadata conflict **409**, cross-actor key reuse, raw-key non-persistence and a PostgreSQL barrier-forced concurrent first-request race that leaves one durable submission, one idempotency record and one quarantine file;
 - signed cursor regression paths covering three stable sort orders, equal-key tie-breaks, no duplicate/gap traversal, actor/filter binding, tamper rejection and bounded page size;
+- queued-upload API regression paths covering HTTP **202**, `QUEUED` state, atomic creation of one scan job plus one outbox event, exact idempotent replay without duplicate jobs, and payload-conflict **409**;
+- transactional-outbox/worker failure-window tests covering send-before-published-commit re-delivery, publisher send failure recovery, scan failure retry state, and message re-delivery after a durable completed scan without duplicated findings/audit;
+- a separate PostgreSQL 16 + Moto SQS-compatible integration gate that creates queue/DLQ state through boto3, publishes a committed outbox event over HTTP, consumes it through the production SQS adapter, persists the scan result, deletes the receipt only after commit, and deliberately replays the same payload to verify idempotent completion;
 - PostgreSQL query-plan evidence that seeds 20,000 synthetic submissions, runs `ANALYZE`, and requires default-planner `EXPLAIN (FORMAT JSON)` plans for deep `newest` and `risk_desc` keyset queries to reference their corresponding composite cursor indexes;
 - frontend dependency audit, typecheck, unit tests and build;
 - Docker Compose configuration and full-stack route verification;
 - final container build.
 
-The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies Alembic through **`0003(head)`**, verifies both cursor-pagination composite indexes in `pg_indexes`, and collects the same **92 tests**, with **91 passed + 1 SQLite-only skipped**. It also seeds **20,000 synthetic submissions**, runs `ANALYZE`, and checks default-planner `EXPLAIN (FORMAT JSON)` output for deep keyset queries: `newest` must use `ix_submissions_created_id` and `risk_desc` must use `ix_submissions_risk_cursor`. The complete plan JSON is retained as a CI artifact. Its pool contract still uses 3 persistent + 2 overflow connections and verifies saturation, explicit 503 behavior and recovery. Terraform format, `init -backend=false` and `validate` also run. These checks validate code, configuration and planner/index selection under the CI fixture; they do not demonstrate production latency, throughput, a live AWS deployment or a real IdP integration.
+The dedicated AWS backend-service workflow separately starts **PostgreSQL 16**, applies Alembic through **`0004(head)`**, verifies the cursor-pagination composite indexes in `pg_indexes`, and runs the full backend contract against PostgreSQL. It also seeds **20,000 synthetic submissions**, runs `ANALYZE`, and checks default-planner `EXPLAIN (FORMAT JSON)` output for deep keyset queries: `newest` must use `ix_submissions_created_id` and `risk_desc` must use `ix_submissions_risk_cursor`. The complete plan JSON is retained as a CI artifact. Its pool contract still uses 3 persistent + 2 overflow connections and verifies saturation, explicit 503 behavior and recovery. Terraform format, `init -backend=false` and `validate` also run. These checks validate code, configuration and planner/index selection under the CI fixture; they do not demonstrate production latency, throughput, a live AWS deployment or a real IdP integration.
 
 ## Repository structure
 
@@ -247,7 +255,7 @@ docs/adr/                               Architecture decision records
 
 ## Production boundary
 
-Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing the project as production-ready. The AWS backend path is a statically validated reference deployment and the OIDC tests mock the identity-provider network boundary. A successfully introspected token can remain accepted until the deliberately short cache TTL expires if it is revoked immediately after introspection; deployments requiring immediate revocation can disable the resident cache. Single-flight coordination is per API process, so separate ECS tasks can each perform one introspection for the same cold token. Keyset cursors are stateless and designed to avoid deep `OFFSET` scans. PostgreSQL CI confirms the intended composite indexes are selected by the default planner for a 20,000-row synthetic fixture, but that is query-plan evidence rather than a production performance benchmark. They also do not provide snapshot isolation: concurrent submissions or rechecks that change a mutable sort key such as `risk_score` can move records between traversal steps. Submission ETags likewise represent the current mutable row version for conditional writes; they are not database locks, snapshot tokens or cross-request transactions. Upload idempotency is actor-scoped and payload-bound inside the PostgreSQL transaction contract, but it is not a distributed exactly-once guarantee across regions or independent datastores. A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, pool sizing against the deployed RDS `max_connections` and ECS task count with migration/administration/failover headroom, malware scanning, formal privacy/security review and representative source-system validation.
+Read [`docs/production-readiness.md`](docs/production-readiness.md) before describing the project as production-ready. The AWS backend path is a statically validated reference deployment and the OIDC tests mock the identity-provider network boundary. A successfully introspected token can remain accepted until the deliberately short cache TTL expires if it is revoked immediately after introspection; deployments requiring immediate revocation can disable the resident cache. Single-flight coordination is per API process, so separate ECS tasks can each perform one introspection for the same cold token. Keyset cursors are stateless and designed to avoid deep `OFFSET` scans. PostgreSQL CI confirms the intended composite indexes are selected by the default planner for a 20,000-row synthetic fixture, but that is query-plan evidence rather than a production performance benchmark. They also do not provide snapshot isolation: concurrent submissions or rechecks that change a mutable sort key such as `risk_score` can move records between traversal steps. Submission ETags likewise represent the current mutable row version for conditional writes; they are not database locks, snapshot tokens or cross-request transactions. Upload idempotency is actor-scoped and payload-bound inside the PostgreSQL transaction contract, but it is not a distributed exactly-once guarantee across regions or independent datastores. Asynchronous scan delivery is likewise deliberately **at-least-once**, not exactly-once: the outbox publisher may resend after a crash between SQS acceptance and the `PUBLISHED` commit, and the worker may receive a message again after scan commit but before SQS deletion. Durable job state makes those duplicate deliveries safe within the demonstrated single-PostgreSQL contract. A real service would still require an approved IdP tenant and claim contract, applied cloud infrastructure, operational alerting, live secret rotation, database recovery tests, pool sizing against the deployed RDS `max_connections` and ECS task count with migration/administration/failover headroom, malware scanning, formal privacy/security review and representative source-system validation.
 
 ## Author
 

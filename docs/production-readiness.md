@@ -9,12 +9,12 @@ This document separates what the repository demonstrates from work required befo
 | Review concurrency | strong id/version ETags, `If-Match` plus legacy expected-version compatibility, database compare-and-swap for claim and final review writes, transactional decision/audit persistence and expiring review-claim lease | representative multi-instance load/concurrency testing, client retry/precondition UX validation and operational tuning of the lease duration |
 | Upload idempotency | actor-scoped hashed keys, payload fingerprints, PostgreSQL unique-race recovery, legacy-key migration and staged-file cleanup on replay/conflict/failure | distributed/multi-region retry semantics, durable object-store reconciliation and representative concurrent client testing beyond the CI fixture |
 | Storage | quarantine directory, explicit retirement and encrypted EFS/S3 reference controls | approved encrypted storage, bucket/file-system policy, malware scanning, retention enforcement and legal-hold design where required |
-| Processing | deterministic synchronous checks | isolated asynchronous workers, malware scan, parser timeouts, retries and workload resource limits |
+| Processing | synchronous local mode plus queued API mode, durable scan jobs, transactional outbox publisher, boto3 SQS transport, independent idempotent workers, expiring claims, retry-safe failures, SQS/DLQ Terraform and PostgreSQL+SQS-compatible CI | malware scanning, parser hard timeouts/resource isolation, applied AWS deployment, autoscaling/load tests, queue-age alarms and operational DLQ replay/runbook |
 | Policy | versioned catalogue and retrospective simulation | formal owner, approval record, test corpus and controlled release process |
 | Audit | request IDs, hash-linked events, signed reports and atomic review-claim/audit persistence | central append-only log, managed signing key, independent verification and recovery testing |
 | Operations | database/storage readiness checks, Prometheus HTTP telemetry, OIDC cache/single-flight outcomes, IdP latency, live per-process PostgreSQL pool capacity/utilisation gauges and checkout-timeout counts | dashboards, service-level objectives, paging, aggregate RDS/ECS capacity alerts, dependency-specific alerts and incident response |
 | Privacy | evidence redaction and synthetic benchmark | privacy review, data-flow assessment and disclosure-control validation |
-| Delivery | CI, cross-stack release-version contract, dependency audits, PostgreSQL migration/pool contract, Terraform validation and container configuration | image signing, software bill of materials, environment promotion, deployment migration orchestration and rollback testing |
+| Delivery | CI, cross-stack release-version contract, dependency audits, PostgreSQL migration/pool contract, Terraform validation, container configuration and an SQS-compatible committed-outbox-to-worker integration gate | image signing, software bill of materials, environment promotion, deployment migration orchestration and rollback testing |
 
 ## Suggested service-level indicators
 
@@ -59,8 +59,18 @@ Alembic revision `0002` adds `(created_at, id)` and `(risk_score DESC, created_a
 
 Keyset pagination is not snapshot isolation. Concurrent inserts, deletes or rechecks can change the result set while a client traverses it; in particular, a recheck that changes `risk_score` can move a submission across a `risk_desc` cursor boundary. A production consumer that requires a frozen export must use an explicit snapshot/versioning design rather than treating this cursor as a snapshot token.
 
+## Asynchronous scan delivery boundary
+
+Queued execution uses PostgreSQL as the durable hand-off boundary. The upload request writes the submission, `ScanJob`, `OutboxEvent` and hash-linked `SCAN_QUEUED` audit state in one transaction and returns HTTP 202 without executing the disclosure checker. A separate publisher claims committed outbox rows and sends their versioned payload to SQS; independent workers receive messages, claim the matching durable job, execute the shared scanning application service, commit terminal database/audit state, and only then delete the SQS receipt.
+
+Delivery is intentionally **at-least-once**. If SQS accepts a message but the publisher crashes before marking the outbox row `PUBLISHED`, the expired outbox claim can be reclaimed and the payload sent again. If the worker commits a completed scan but crashes before deleting the SQS receipt, the message can also be delivered again. The worker checks the durable job state first, so a `COMPLETED` job is acknowledged without a second scan or duplicate completion audit. Failed scans return the job to `QUEUED`, record a bounded error/audit entry and leave the message undeleted so queue visibility/redrive policy can retry it.
+
+CI covers both deterministic failure windows and a separate PostgreSQL 16 plus Moto SQS-compatible HTTP integration using the production boto3 transport. The integration creates a queue and DLQ, publishes a committed outbox event, consumes and completes it, then deliberately re-sends the same payload and verifies no duplicate scan completion is persisted. Moto is used because recent LocalStack images require an external commercial auth token even for startup; no repository secret or live-AWS claim is introduced. Terraform separately validates real AWS SQS/DLQ/redrive resources and least-privilege publisher/worker IAM.
+
+This is not a production exactly-once guarantee, a live AWS deployment, or evidence of queue throughput/latency under real load. Production still requires applied infrastructure, CloudWatch alarms for queue age/DLQ depth, autoscaling and back-pressure tests, poison-message/runbook validation, controlled DLQ replay, malware scanning and resource/time limits around untrusted parsers.
+
 ## Release gates
 
-A production release should require tests, cross-stack release-version consistency, PostgreSQL migration and connection-pool checks, dependency audit, synthetic benchmark, Terraform validation for infrastructure changes, security review for high-risk changes and a recorded policy approval when decision behaviour changes.
+A production release should require tests, cross-stack release-version consistency, PostgreSQL migration and connection-pool checks, asynchronous outbox/worker retry contracts when queue code changes, dependency audit, synthetic benchmark, Terraform validation for infrastructure changes, security review for high-risk changes and a recorded policy approval when decision behaviour changes.
 
 The current OIDC single-flight implementation is deliberately per process. It reduces duplicate introspection requests inside one API process but does not coordinate separate ECS tasks. Any production capacity assessment should therefore assume that the same cold token can still produce one upstream introspection per active task.

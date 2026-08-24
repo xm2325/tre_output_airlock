@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.15.0 — 2026-08-24
+
+### Durable asynchronous scanning
+
+- Moved AWS-reference upload scanning out of the HTTP request path with a PostgreSQL transactional outbox, durable scan jobs and HTTP 202 queued submissions while keeping synchronous local/demo compatibility.
+- Added an independent outbox publisher and idempotent Python scan worker with expiring claims, retry-safe failure handling and duplicate-delivery suppression after durable completion.
+- Added a boto3 SQS transport plus encrypted SQS/DLQ/redrive Terraform, separate publisher/worker ECS services and least-privilege runtime IAM roles.
+- Added PostgreSQL 16 + SQS-compatible HTTP integration evidence from committed outbox through worker completion and deliberate duplicate replay.
+- Added Alembic revision `0004` for scan jobs/outbox persistence and routed create/recheck/worker execution through one scanning application service.
+- Expanded the backend contract to 108 collected tests; the standard job passes 106 with two environment-specific skips at 90.50% coverage, with Ruff, strict MyPy and dependency audit green.
+
+### Boundaries
+
+- Queue delivery is deliberately at-least-once, not exactly-once; durable job state makes the demonstrated crash-window redeliveries idempotent within the single-PostgreSQL contract.
+- The AWS stack remains a CI-validated Terraform reference, not a claimed live deployment.
+
 ## 0.3.1 — 2026-07-14
 
 ### Delivery reliability
