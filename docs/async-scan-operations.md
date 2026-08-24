@@ -68,6 +68,18 @@ The default Terraform values are deliberately illustrative:
 
 These values are not production SLOs. A real deployment must calibrate them from arrival rate, scan-duration distribution, worker concurrency, SQS visibility timeout, error budget and the expected time to detect/respond.
 
+## Validation evidence
+
+The v0.16 functional gate exercises the observability and recovery additions on both database paths rather than relying on SQLite alone:
+
+- standard backend: **111 collected, 109 passed + 2 environment-specific skipped, 90.76% coverage** against the 90% gate;
+- PostgreSQL 16: **110 passed + 1 environment-specific skipped** after applying Alembic through `0004(head)`;
+- durable-state tests cover pending/publishing/published outbox rows, queued/processing/completed jobs, stale publisher and worker leases, retries, oldest backlog age and stale `PROCESSING` reclamation;
+- Terraform `fmt`, `init -backend=false` and `validate` cover the three native SQS CloudWatch alarms;
+- the existing PostgreSQL + SQS-compatible committed-outbox-to-worker integration remains green, so the monitoring changes do not alter transport or acknowledgement semantics.
+
+The first dual-database run also exposed a test-fixture issue that SQLite tolerated: child `ScanJob`/`OutboxEvent` rows had been staged without explicit parent flushes. The fixture now explicitly persists `Submission -> ScanJob -> OutboxEvent` ordering before the PostgreSQL foreign-key checks. This was a test-evidence repair, not a relaxation of database constraints.
+
 ## What is not automated
 
 The repository does not automatically redrive the DLQ, change ECS desired count from queue depth, or publish custom PostgreSQL metrics to CloudWatch. Those are deliberate boundaries: automatic replay can amplify deterministic failures, and autoscaling thresholds should not be invented without representative workload evidence.
