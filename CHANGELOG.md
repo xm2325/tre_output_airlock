@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.16.0 — 2026-08-24
+
+### Async operations and recovery
+
+- Added DB-backed `/metrics/async` gauges for durable outbox/job backlog, completion, retries, stale leases and oldest backlog age while preserving the DB-independent core metrics endpoint.
+- Added cross-SQLite/PostgreSQL stale-worker lease recovery coverage and explicit foreign-key-safe test fixtures.
+- Added native CloudWatch alarms for SQS visible backlog, oldest visible message age and DLQ depth without granting the API SQS permissions.
+- Added an async operations runbook covering alert interpretation, at-least-once failure windows, automatic lease recovery and controlled DLQ handling boundaries.
+- Kept alert thresholds explicitly illustrative rather than claiming production SLO calibration or live AWS operation.
+
 ## 0.15.0 — 2026-08-24
 
 ### Durable asynchronous scanning

@@ -12,11 +12,13 @@ The design intentionally keeps two monitoring planes separate.
 
 - `airlock_async_outbox_pending`: committed events waiting for a publisher;
 - `airlock_async_outbox_publishing`: events currently holding a publisher lease;
+- `airlock_async_outbox_published`: durable events marked published;
 - `airlock_async_outbox_stale_publishing`: publisher leases old enough to be reclaimed;
 - `airlock_async_outbox_retry_events`: events claimed more than once;
 - `airlock_async_outbox_oldest_unpublished_age_seconds`: age of the oldest unpublished event;
 - `airlock_async_scan_queued`: durable jobs waiting for a worker;
 - `airlock_async_scan_processing`: durable jobs with an active worker lease;
+- `airlock_async_scan_completed`: durable jobs completed successfully;
 - `airlock_async_scan_stale_processing`: worker leases old enough to be reclaimed;
 - `airlock_async_scan_retry_jobs`: jobs claimed more than once;
 - `airlock_async_scan_retryable_failures`: queued jobs carrying a recorded retryable failure;
