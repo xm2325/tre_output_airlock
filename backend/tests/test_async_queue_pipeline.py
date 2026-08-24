@@ -10,7 +10,7 @@ from app.core.async_scan import AsyncScanSettings
 from app.db import SessionLocal
 from app.models import OutboxEvent, ScanJob, Submission
 from app.services.outbox_publisher import claim_outbox_batch, publish_outbox_batch
-from app.services.scan_jobs import enqueue_scan
+from app.services.scan_jobs import ScanMessage, enqueue_scan
 from app.services.sqs_transport import QueueTransport, ReceivedQueueMessage
 from app.services.storage import quarantined_path
 from app.workers.scan_worker import run_worker_once
@@ -103,6 +103,7 @@ def test_outbox_publish_marks_event_published() -> None:
         assert result.published == 1
         assert result.failed == 0
         assert len(transport.sent) == 1
+        assert ScanMessage.from_json(transport.sent[0]).request_id == "async-test-request"
         assert event is not None
         assert event.status == "PUBLISHED"
         assert event.attempt_count == 1
@@ -127,6 +128,9 @@ def test_outbox_reclaims_after_send_before_published_commit() -> None:
         event = db.get(OutboxEvent, event_id)
         assert result.published == 1
         assert len(transport.sent) == 2
+        assert {
+            ScanMessage.from_json(payload).request_id for payload in transport.sent
+        } == {"async-test-request"}
         assert event is not None
         assert event.status == "PUBLISHED"
         assert event.attempt_count == 2
@@ -146,7 +150,7 @@ def test_outbox_send_failure_returns_event_to_pending() -> None:
         assert event.last_error == "synthetic SQS outage"
 
 
-def test_worker_duplicate_delivery_does_not_repeat_scan() -> None:
+def test_worker_duplicate_delivery_preserves_correlation_without_repeat_scan() -> None:
     submission_id, _ = create_queued_submission()
     transport = FakeQueue()
     with SessionLocal() as db:
@@ -167,11 +171,12 @@ def test_worker_duplicate_delivery_does_not_repeat_scan() -> None:
         assert job is not None and job.status == "COMPLETED"
         assert submission is not None
         completed_events = [
-            item.event_type
+            item
             for item in submission.audit_events
             if item.event_type == "AUTOMATED_CHECK_COMPLETED"
         ]
         assert len(completed_events) == 1
+        assert completed_events[0].request_id == "async-test-request"
         version_after_first = submission.row_version
 
     transport.incoming.append(
@@ -187,16 +192,16 @@ def test_worker_duplicate_delivery_does_not_repeat_scan() -> None:
         submission = db.get(Submission, submission_id)
         assert submission is not None
         assert submission.row_version == version_after_first
-        assert (
-            sum(
-                item.event_type == "AUTOMATED_CHECK_COMPLETED"
-                for item in submission.audit_events
-            )
-            == 1
-        )
+        completed_events = [
+            item
+            for item in submission.audit_events
+            if item.event_type == "AUTOMATED_CHECK_COMPLETED"
+        ]
+        assert len(completed_events) == 1
+        assert completed_events[0].request_id == "async-test-request"
 
 
-def test_worker_failure_keeps_message_for_retry() -> None:
+def test_worker_failure_keeps_message_and_correlation_for_retry() -> None:
     submission_id, _ = create_queued_submission()
     quarantined_path(submission_id, "safe.csv").unlink()
     transport = FakeQueue()
@@ -219,4 +224,40 @@ def test_worker_failure_keeps_message_for_retry() -> None:
         assert job.attempt_count == 1
         assert job.last_error == "Quarantined file is no longer available."
         assert submission is not None and submission.status == "QUEUED"
-        assert any(item.event_type == "SCAN_ATTEMPT_FAILED" for item in submission.audit_events)
+        failed_events = [
+            item for item in submission.audit_events if item.event_type == "SCAN_ATTEMPT_FAILED"
+        ]
+        assert len(failed_events) == 1
+        assert failed_events[0].request_id == "async-test-request"
+
+
+def test_worker_accepts_legacy_v1_message_during_rolling_deployment() -> None:
+    submission_id, event_id = create_queued_submission()
+    with SessionLocal() as db:
+        job = db.scalar(select(ScanJob).where(ScanJob.submission_id == submission_id))
+        assert job is not None
+        legacy_payload = ScanMessage(
+            event_id=event_id,
+            job_id=job.id,
+            submission_id=submission_id,
+            schema_version=1,
+        ).to_json()
+
+    transport = FakeQueue()
+    transport.incoming.append(
+        ReceivedQueueMessage(message_id="m-v1", receipt_handle="r-v1", body=legacy_payload)
+    )
+
+    result = run_worker_once(transport, queue_settings())
+
+    assert result == type(result)(received=1, deleted=1, failed=0)
+    with SessionLocal() as db:
+        submission = db.get(Submission, submission_id)
+        assert submission is not None
+        completed_events = [
+            item
+            for item in submission.audit_events
+            if item.event_type == "AUTOMATED_CHECK_COMPLETED"
+        ]
+        assert len(completed_events) == 1
+        assert completed_events[0].request_id is None

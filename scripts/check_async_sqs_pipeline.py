@@ -12,7 +12,7 @@ from app.db import SessionLocal
 from app.models import OutboxEvent, ScanJob, Submission
 from app.services.audit import append_audit_event
 from app.services.outbox_publisher import publish_outbox_batch
-from app.services.scan_jobs import enqueue_scan
+from app.services.scan_jobs import ScanMessage, enqueue_scan
 from app.services.sqs_transport import AwsSqsTransport
 from app.services.storage import quarantined_path
 from app.workers.scan_worker import run_worker_once
@@ -28,6 +28,7 @@ def main() -> None:
         endpoint_url=async_settings.endpoint_url,
     )
 
+    correlation_id = "async-sqs-ci-correlation"
     content = b"metric,count\nalpha,20\nbeta,25\n"
     submission_id = str(uuid4())
     filename = "async-pipeline.csv"
@@ -58,22 +59,23 @@ def main() -> None:
             submission,
             "SUBMITTED",
             "async-sqs-ci",
-            "Synthetic LocalStack integration submission.",
-            "async-sqs-ci",
+            "Synthetic SQS-compatible integration submission.",
+            correlation_id,
         )
         append_audit_event(
             submission,
             "QUARANTINED",
             "airlock-service",
             "Synthetic file stored for asynchronous integration validation.",
-            "async-sqs-ci",
+            correlation_id,
         )
         db.add(submission)
         db.flush()
-        job, outbox = enqueue_scan(db, submission, request_id="async-sqs-ci")
+        job, outbox = enqueue_scan(db, submission, request_id=correlation_id)
         job_id = job.id
         event_id = outbox.id
         payload = outbox.payload_json
+        assert ScanMessage.from_json(payload).request_id == correlation_id
         db.commit()
 
     with SessionLocal() as db:
@@ -102,6 +104,7 @@ def main() -> None:
             item for item in finished.audit_events if item.event_type == "AUTOMATED_CHECK_COMPLETED"
         ]
         assert len(completed_events) == 1
+        assert completed_events[0].request_id == correlation_id
         version_after_first = finished.row_version
 
     # Re-deliver the exact message after the durable scan transaction committed.
@@ -117,18 +120,18 @@ def main() -> None:
         finished = db.get(Submission, submission_id)
         assert job is not None and job.attempt_count == 1
         assert finished is not None and finished.row_version == version_after_first
-        assert (
-            sum(
-                event.event_type == "AUTOMATED_CHECK_COMPLETED"
-                for event in finished.audit_events
-            )
-            == 1
-        )
+        completed_events = [
+            event
+            for event in finished.audit_events
+            if event.event_type == "AUTOMATED_CHECK_COMPLETED"
+        ]
+        assert len(completed_events) == 1
+        assert completed_events[0].request_id == correlation_id
         assert db.scalar(select(OutboxEvent).where(OutboxEvent.id == event_id)) is not None
 
     print(
-        "async SQS pipeline verified: committed outbox -> SQS -> worker -> durable result -> "
-        "duplicate-safe replay"
+        "async SQS pipeline verified: committed outbox -> SQS -> correlated worker audit -> "
+        "durable result -> duplicate-safe replay"
     )
 
 

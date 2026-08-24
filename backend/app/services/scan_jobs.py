@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 from app.models import OutboxEvent, ScanJob, Submission
 from app.services.audit import append_audit_event
 
-SCAN_MESSAGE_SCHEMA_VERSION = 1
+SCAN_MESSAGE_SCHEMA_VERSION = 2
+SUPPORTED_SCAN_MESSAGE_SCHEMA_VERSIONS = {1, SCAN_MESSAGE_SCHEMA_VERSION}
 SCAN_REQUESTED_EVENT = "SCAN_REQUESTED"
 
 
@@ -18,19 +19,21 @@ class ScanMessage:
     event_id: str
     job_id: str
     submission_id: str
+    request_id: str | None = None
     schema_version: int = SCAN_MESSAGE_SCHEMA_VERSION
 
     def to_json(self) -> str:
-        return json.dumps(
-            {
-                "event_id": self.event_id,
-                "job_id": self.job_id,
-                "schema_version": self.schema_version,
-                "submission_id": self.submission_id,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        payload: dict[str, object] = {
+            "event_id": self.event_id,
+            "job_id": self.job_id,
+            "schema_version": self.schema_version,
+            "submission_id": self.submission_id,
+        }
+        if self.schema_version >= 2:
+            if not isinstance(self.request_id, str) or not self.request_id.strip():
+                raise ValueError("Scan message request_id must be a non-empty string")
+            payload["request_id"] = self.request_id
+        return json.dumps(payload, sort_keys=True, separators=(",", ":"))
 
     @classmethod
     def from_json(cls, payload: str) -> ScanMessage:
@@ -40,7 +43,8 @@ class ScanMessage:
             raise ValueError("Scan message must be valid JSON") from exc
         if not isinstance(data, dict):
             raise ValueError("Scan message must be a JSON object")
-        if data.get("schema_version") != SCAN_MESSAGE_SCHEMA_VERSION:
+        schema_version = data.get("schema_version")
+        if schema_version not in SUPPORTED_SCAN_MESSAGE_SCHEMA_VERSIONS:
             raise ValueError("Unsupported scan message schema version")
         required = ("event_id", "job_id", "submission_id")
         values: dict[str, str] = {}
@@ -49,10 +53,20 @@ class ScanMessage:
             if not isinstance(value, str) or not value.strip():
                 raise ValueError(f"Scan message {field} must be a non-empty string")
             values[field] = value
+
+        request_id: str | None = None
+        if schema_version >= 2:
+            value = data.get("request_id")
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError("Scan message request_id must be a non-empty string")
+            request_id = value
+
         return cls(
             event_id=values["event_id"],
             job_id=values["job_id"],
             submission_id=values["submission_id"],
+            request_id=request_id,
+            schema_version=schema_version,
         )
 
 
@@ -66,6 +80,7 @@ def enqueue_scan(
 
     job_id = str(uuid4())
     event_id = str(uuid4())
+    correlation_id = request_id.strip() if request_id and request_id.strip() else str(uuid4())
     job = ScanJob(
         id=job_id,
         submission_id=submission.id,
@@ -76,6 +91,7 @@ def enqueue_scan(
         event_id=event_id,
         job_id=job_id,
         submission_id=submission.id,
+        request_id=correlation_id,
     )
     outbox = OutboxEvent(
         id=event_id,
@@ -93,7 +109,7 @@ def enqueue_scan(
         "SCAN_QUEUED",
         "airlock-service",
         f"scan_job_id={job_id}; outbox_event_id={event_id}.",
-        request_id,
+        correlation_id,
     )
 
     db.add(submission)
