@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, async-correlation-v0.17]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -15,12 +15,11 @@ concurrency:
 
 jobs:
   finalize-v017:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/async-correlation-v0.17'
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: async-correlation-v0.17
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
@@ -31,7 +30,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Finalize v0.17 source, docs and locks
+      - name: Generate and validate v0.17 release
         env:
           BEFORE_SHA: ${{ github.event.before }}
         run: |
@@ -128,7 +127,13 @@ jobs:
           npm install --package-lock-only --ignore-scripts --no-audit --no-fund
           npm ci --ignore-scripts --no-audit --no-fund
           cd ..
+          python scripts/check_release_version.py
           git diff --check
+
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            echo "v0.17 release preview passed; no repository write on pull_request"
+            exit 0
+          fi
 
           git show "$BEFORE_SHA:.github/workflows/ci.yml" > .github/workflows/ci.yml
           rm -f .finalize-v017-trigger .github/workflows/finalize-v017-once.yml
@@ -137,7 +142,7 @@ jobs:
           git add -A
           git diff --cached --quiet && exit 0
           git commit -m "release: finalize v0.17.0 correlation evidence"
-          git push origin HEAD:async-correlation-v0.17
+          git push origin HEAD:main
 
   release-contract:
     runs-on: ubuntu-latest
