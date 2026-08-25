@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.18.0 — 2026-08-24
+
+### Long-running scan ownership fencing
+
+- Added a per-attempt UUID `claim_token` to durable scan jobs through Alembic revision `0005`.
+- Added token-guarded PostgreSQL lease heartbeats and SQS `ChangeMessageVisibility` renewal for long-running asynchronous scans.
+- Guarded terminal success and failure/requeue writes by the current claim token so a stale worker cannot commit findings, audit state or retry state after ownership changes.
+- Kept active duplicate deliveries unacknowledged while another worker owns a live lease, preserving a recoverable message if the active worker later fails.
+- Added PostgreSQL-only evidence that changes ownership during an in-flight scan and verifies the stale transaction rolls back its pending scan audit/results.
+- Expanded the backend contract to 122 collected tests: 119 passed with three environment-specific skips at 90.16% coverage on the standard job; PostgreSQL passes 121 with one environment-specific skip.
+
+### Boundary
+
+- Heartbeats reduce avoidable redelivery but are not the correctness mechanism. Claim-token conditional writes fence stale workers. Delivery remains at-least-once, not distributed exactly-once, and SQS visibility renewal failure can still cause duplicate delivery.
+
 ## 0.17.0 — 2026-08-24
 
 ### Async request correlation and troubleshooting
