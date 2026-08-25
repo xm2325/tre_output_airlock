@@ -83,7 +83,12 @@ jobs:
         run: uv sync --frozen --all-extras
       - name: Lint Keycloak integration contract
         working-directory: backend
-        run: uv run ruff check ../scripts/check_keycloak_oidc_integration.py
+        run: >-
+          uv run ruff check
+          ../scripts/check_keycloak_oidc_integration.py
+          ../integration/keycloak/prepare_realm.py
+      - name: Normalise Keycloak CI user profiles
+        run: python integration/keycloak/prepare_realm.py integration/keycloak/airlock-ci-realm.json
       - name: Start pinned Keycloak provider
         run: |
           docker run -d --name airlock-keycloak \
