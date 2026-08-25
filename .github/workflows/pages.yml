@@ -35,7 +35,7 @@ jobs:
         env:
           VITE_DEMO_MODE: "true"
           VITE_BASE_PATH: /tre_output_airlock/
-      - uses: actions/configure-pages@v5
+      - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v3
         with:
           path: frontend/dist
