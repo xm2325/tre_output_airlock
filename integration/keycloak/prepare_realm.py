@@ -15,7 +15,11 @@ def _ensure_introspection_audience(payload: dict[str, object]) -> None:
         mappers = client.setdefault("protocolMappers", [])
         if not isinstance(mappers, list):
             raise RuntimeError("airlock-api protocolMappers must be a list")
-        if any(isinstance(item, dict) and item.get("name") == "airlock-api-audience" for item in mappers):
+        has_audience_mapper = any(
+            isinstance(item, dict) and item.get("name") == "airlock-api-audience"
+            for item in mappers
+        )
+        if has_audience_mapper:
             return
         mappers.append(
             {
