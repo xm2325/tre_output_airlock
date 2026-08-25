@@ -156,3 +156,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker compose build
+
+  finalize-v018:
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.number == 44 &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'scan-lease-fencing-v0.18'
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: scan-lease-fencing-v0.18
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Finalize v0.18 metadata, native locks and docs
+        run: bash .delivery/finalize-v018.sh
