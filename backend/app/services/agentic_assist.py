@@ -72,10 +72,11 @@ def reject_obvious_instruction_override(objective: str) -> None:
 
 
 def build_candidate_plan(objective: str) -> list[str]:
-    """Build a deterministic local plan that exercises the same policy boundary as an LLM planner.
+    """Build a deterministic local plan that uses the same tool-policy boundary as an LLM.
 
-    This is intentionally not presented as an intelligent planner. A future model adapter may produce
-    the same list of candidate tools, but it must still pass ``validate_tool_plan`` before execution.
+    This is intentionally not presented as an intelligent planner. A future model adapter may
+    produce the same candidate-tool list, but the list must still pass ``validate_tool_plan``
+    before execution.
     """
 
     lowered = objective.lower()
@@ -141,7 +142,9 @@ def run_agent_assist(
     candidate_tools: list[str] | None = None,
 ) -> AgentAssistOut:
     reject_obvious_instruction_override(objective)
-    proposed_tools = candidate_tools if candidate_tools is not None else build_candidate_plan(objective)
+    proposed_tools = (
+        candidate_tools if candidate_tools is not None else build_candidate_plan(objective)
+    )
     tools = validate_tool_plan(proposed_tools, actor.role)
 
     evidence: list[str] = []
