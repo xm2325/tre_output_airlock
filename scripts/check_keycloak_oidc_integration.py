@@ -17,7 +17,7 @@ from app.main import app
 KEYCLOAK_BASE_URL = os.getenv("AIRLOCK_KEYCLOAK_BASE_URL", "http://127.0.0.1:8081").rstrip("/")
 REALM = "airlock-ci"
 CLIENT_ID = "airlock-backend"
-CLIENT_SECRET = "airlock-ci-secret"
+CLIENT_SECRET = os.environ["AIRLOCK_KC_CLIENT_SECRET"]
 ISSUER = f"{KEYCLOAK_BASE_URL}/realms/{REALM}"
 TOKEN_URL = f"{ISSUER}/protocol/openid-connect/token"
 
@@ -29,8 +29,12 @@ def _post_form(url: str, data: dict[str, str]) -> dict[str, Any]:
         headers={"Content-Type": "application/x-www-form-urlencoded"},
         method="POST",
     )
-    with urlopen(request, timeout=10) as response:  # noqa: S310 - fixed CI IdP endpoint
-        payload = json.loads(response.read().decode("utf-8"))
+    try:
+        with urlopen(request, timeout=10) as response:  # noqa: S310 - fixed CI IdP endpoint
+            payload = json.loads(response.read().decode("utf-8"))
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Keycloak POST failed with HTTP {exc.code}: {body}") from exc
     if not isinstance(payload, dict):
         raise AssertionError(f"Expected JSON object from {url}")
     return payload
@@ -52,7 +56,7 @@ def _wait_for_keycloak() -> None:
     raise RuntimeError(f"Keycloak did not become ready: {last_error}")
 
 
-def _token(username: str, password: str) -> str:
+def _token(username: str, password_env: str) -> str:
     payload = _post_form(
         TOKEN_URL,
         {
@@ -60,7 +64,7 @@ def _token(username: str, password: str) -> str:
             "client_secret": CLIENT_SECRET,
             "grant_type": "password",
             "username": username,
-            "password": password,
+            "password": os.environ[password_env],
             "scope": "openid",
         },
     )
@@ -97,10 +101,10 @@ def main() -> None:
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
 
-    researcher = _token("researcher-ci", "researcher-pass")
-    reviewer = _token("reviewer-ci", "reviewer-pass")
-    admin = _token("admin-ci", "admin-pass")
-    unmapped = _token("unmapped-ci", "unmapped-pass")
+    researcher = _token("researcher-ci", "AIRLOCK_KC_RESEARCHER_PASSWORD")
+    reviewer = _token("reviewer-ci", "AIRLOCK_KC_REVIEWER_PASSWORD")
+    admin = _token("admin-ci", "AIRLOCK_KC_ADMIN_PASSWORD")
+    unmapped = _token("unmapped-ci", "AIRLOCK_KC_UNMAPPED_PASSWORD")
 
     with TestClient(app) as client:
         _assert_identity(client, researcher, "researcher-ci", "researcher")
