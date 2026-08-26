@@ -44,7 +44,9 @@ def _wait_for_keycloak() -> None:
             with urlopen(discovery_url, timeout=2) as response:  # noqa: S310 - fixed CI IdP endpoint
                 if response.status == 200:
                     return
-        except (HTTPError, URLError, TimeoutError) as exc:
+        except (HTTPError, URLError, TimeoutError, OSError) as exc:
+            # Keycloak can accept then reset connections while its first start-dev
+            # build/import is still completing. Treat that as not-ready, not fatal.
             last_error = exc
         time.sleep(1)
     raise RuntimeError(f"Keycloak did not become ready: {last_error}")
