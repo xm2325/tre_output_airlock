@@ -1,0 +1,104 @@
+name: Finalize v0.19 release
+
+on:
+  push:
+    branches: [oidc-keycloak-integration-v0.19]
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.event.head_commit.message == 'chore: trigger v0.19 finalizer'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: oidc-keycloak-integration-v0.19
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.10.0"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Generate release metadata and evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              if text.count(old) != 1:
+                  raise SystemExit(f"Expected exactly one release anchor in {path}: {old!r}")
+              target.write_text(text.replace(old, new), encoding="utf-8")
+
+          replace_once("VERSION", "0.18.0\n", "0.19.0\n")
+          replace_once("backend/app/version.py", '0.18.0', '0.19.0')
+          replace_once("backend/pyproject.toml", 'version = "0.18.0"', 'version = "0.19.0"')
+          replace_once("frontend/package.json", '"version": "0.18.0"', '"version": "0.19.0"')
+
+          replace_once(
+              "README.md",
+              "| Identity and authorisation | OAuth2/OIDC token introspection with issuer/audience/expiry checks, configurable IdP group-to-RBAC mapping, explicit 401/403/503 paths, and a bounded short-lived successful-introspection cache |",
+              "| Identity and authorisation | OAuth2/OIDC RFC 7662 token introspection with issuer/audience/expiry checks, configurable group-to-RBAC mapping, and a real pinned Keycloak 26.7.2 CI provider contract covering token issuance, introspection and FastAPI authorisation |",
+          )
+          replace_once(
+              "README.md",
+              "- OAuth2/OIDC token-introspection identity with configurable IdP group-to-role mapping;",
+              "- OAuth2/OIDC token-introspection identity with configurable IdP group-to-role mapping plus real Keycloak 26.7.2 CI interoperability using ephemeral credentials;",
+          )
+
+          replace_once(
+              "docs/identity-and-backend-platform.md",
+              "The tests mock the IdP network boundary. They do not contact or claim a real Okta tenant.",
+              "The unit and concurrency tests still isolate the IdP boundary where deterministic failure timing is required, but the CI backend contract now also starts a pinned Keycloak 26.7.2 server and crosses a real HTTP OIDC/RFC 7662 boundary. It obtains real researcher, reviewer, admin and unmapped-user access tokens from a synthetic realm using per-run ephemeral credentials, introspects them through the production adapter, checks issuer/audience/activity and claim mapping, and exercises downstream FastAPI authorisation. Keycloak is representative standards-based integration evidence; it is not Okta, and the repository does not contact or claim a live Okta or Genomics England tenant.",
+          )
+          replace_once(
+              "docs/identity-and-backend-platform.md",
+              "The current v0.14 backend contract collects 92 tests. The standard SQLite coverage path passes 90 with two PostgreSQL-only skips at 90.23% coverage, while the dedicated PostgreSQL 16 path passes 91 with one SQLite-only skip. The PostgreSQL path additionally exercises the barrier-forced upload-idempotency race and the existing pool-saturation contract.",
+              "The v0.19 feature contract collects 124 tests. The standard SQLite coverage path passes 121 with three environment-specific skips at 90.16% coverage and includes the real Keycloak provider integration. The dedicated PostgreSQL 16 path passes 122 with two environment-specific skips and retains the migration, pool-saturation, idempotency-race and stale-worker fencing contracts.",
+          )
+          replace_once(
+              "docs/identity-and-backend-platform.md",
+              "Passing these checks supports claims about tested Python/PostgreSQL behavior, explicit per-task database connection budgets and statically validated Terraform. The OIDC tests use a simulated IdP boundary, including the threaded single-flight cases. These checks do **not** support a claim that the AWS stack has been applied, that the reference pool values have been calibrated against a real RDS instance, that a real IdP integration has been operated, or that single-flight coordination spans multiple service tasks.",
+              "Passing these checks supports claims about tested Python/PostgreSQL behavior, explicit per-task database connection budgets, statically validated Terraform and interoperability with a real representative OIDC/RFC 7662 provider in CI. Mocked/threaded IdP tests remain for deterministic cache and single-flight fault cases. These checks do **not** support a claim that the AWS stack has been applied, that the reference pool values have been calibrated against a real RDS instance, that Keycloak is Okta, that a live Genomics England identity tenant has been operated, or that single-flight coordination spans multiple service tasks.",
+          )
+
+          replace_once(
+              "docs/identity-provider-integration.md",
+              "The CI realm contains researcher, reviewer and admin groups plus an unmapped user. A confidential client obtains user access tokens through a CI-only direct grant and authenticates to the introspection endpoint.",
+              "The CI realm contains researcher, reviewer and admin groups plus an unmapped user. A confidential client obtains user access tokens through a CI-only direct grant and authenticates to the introspection endpoint. Client and user credentials are generated independently for each GitHub Actions run and injected through Keycloak realm-import environment placeholders rather than stored as fixed repository secrets.",
+          )
+
+          changelog = Path("CHANGELOG.md")
+          text = changelog.read_text(encoding="utf-8")
+          marker = "# Changelog\n"
+          if not text.startswith(marker) or "## 0.19.0" in text:
+              raise SystemExit("Unexpected CHANGELOG release state")
+          section = '''\n## 0.19.0 — 2026-08-26\n\n### Real representative IdP integration\n\n- Added a pinned Keycloak 26.7.2 CI realm and a real HTTP OIDC/RFC 7662 interoperability test using the production introspection adapter.\n- Obtained real researcher, reviewer, admin and unmapped-user access tokens and verified issuer, audience, activity, expiry/subject and group-to-role mapping through `/api/v1/me`.\n- Verified route-level authorisation: researcher access to the review queue is denied while reviewer/admin access succeeds; unmapped identities are 403 and invalid/wrong-audience/wrong-issuer tokens fail closed.\n- Added both the resource (`airlock-api`) and introspection-client (`airlock-backend`) audiences required by Keycloak 26.7.2, after CI exposed the provider-specific introspection audience rule.\n- Removed fixed CI identity secrets from the realm fixture; each GitHub Actions run generates ephemeral client/user credentials and injects them through realm-import environment placeholders.\n- Expanded the backend contract to 124 collected tests: the standard job passes 121 with three environment-specific skips at 90.16% coverage; PostgreSQL 16 passes 122 with two environment-specific skips.\n\n### Boundary\n\n- Keycloak is representative standards-based IdP integration evidence, not Okta. The direct password grant is CI-only, credentials are synthetic/ephemeral, and this repository does not claim a live Genomics England or Okta identity tenant.\n'''
+          changelog.write_text(marker + section + text[len(marker):], encoding="utf-8")
+          PY
+
+          cd backend
+          uv lock
+          uv sync --frozen --all-extras
+          cd ../frontend
+          npm install --package-lock-only --ignore-scripts
+          npm ci
+          cd ..
+          python scripts/check_release_version.py
+
+          rm -f .github/workflows/finalize-v019.yml .delivery/v019-finalize-trigger
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "release: finalize v0.19.0 real IdP evidence"
+          git push origin HEAD:oidc-keycloak-integration-v0.19
