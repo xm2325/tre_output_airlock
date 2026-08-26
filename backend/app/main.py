@@ -55,6 +55,13 @@ app = FastAPI(
             "description": "Upload, search, recheck, retention and signed reports.",
         },
         {"name": "review", "description": "Claim-based, risk-prioritised human review workflow."},
+        {
+            "name": "agentic-ai",
+            "description": (
+                "Policy-aware agent assistance with server-side tool permissions, advisory "
+                "proposals, human approval boundaries and audit records."
+            ),
+        },
         {"name": "audit", "description": "Tamper-evident audit-chain verification."},
     ],
 )
