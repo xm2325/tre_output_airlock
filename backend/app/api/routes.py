@@ -1,5 +1,6 @@
 from fastapi import APIRouter
 
+from app.api.agentic_routes import router as agentic_router
 from app.api.async_operations_routes import router as async_operations_router
 from app.api.operations_routes import router as operations_router
 from app.api.policy_routes import router as policy_router
@@ -15,3 +16,4 @@ router.include_router(policy_router)
 router.include_router(submission_cursor_router)
 router.include_router(submission_router)
 router.include_router(review_router)
+router.include_router(agentic_router)
