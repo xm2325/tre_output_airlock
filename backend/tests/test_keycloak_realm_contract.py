@@ -25,7 +25,7 @@ def test_keycloak_realm_fixture_preserves_identity_contract() -> None:
     assert backend["publicClient"] is False
     assert backend["standardFlowEnabled"] is False
     assert backend["directAccessGrantsEnabled"] is True
-    assert backend["secret"] == "airlock-ci-secret"
+    assert backend["secret"] == "${AIRLOCK_KC_CLIENT_SECRET}"
     assert clients["airlock-api"]["bearerOnly"] is True
 
     mappers = _by_key(backend["protocolMappers"], "name")
@@ -40,11 +40,18 @@ def test_keycloak_realm_fixture_preserves_identity_contract() -> None:
     assert users["admin-ci"]["groups"] == ["/airlock-admin"]
     assert "groups" not in users["unmapped-ci"]
 
-    for username, password in {
-        "researcher-ci": "researcher-pass",
-        "reviewer-ci": "reviewer-pass",
-        "admin-ci": "admin-pass",
-        "unmapped-ci": "unmapped-pass",
-    }.items():
-        credentials = users[username]["credentials"]
-        assert credentials == [{"type": "password", "value": password, "temporary": False}]
+    expected_password_placeholders = {
+        "researcher-ci": "${AIRLOCK_KC_RESEARCHER_PASSWORD}",
+        "reviewer-ci": "${AIRLOCK_KC_REVIEWER_PASSWORD}",
+        "admin-ci": "${AIRLOCK_KC_ADMIN_PASSWORD}",
+        "unmapped-ci": "${AIRLOCK_KC_UNMAPPED_PASSWORD}",
+    }
+    for username, placeholder in expected_password_placeholders.items():
+        user = users[username]
+        assert user["email"] == f"{username}@example.invalid"
+        assert user["firstName"]
+        assert user["lastName"] == "CI"
+        assert user["requiredActions"] == []
+        assert user["credentials"] == [
+            {"type": "password", "value": placeholder, "temporary": False}
+        ]
