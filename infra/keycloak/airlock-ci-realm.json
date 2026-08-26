@@ -24,7 +24,7 @@
       "name": "Airlock backend CI client",
       "enabled": true,
       "clientAuthenticatorType": "client-secret",
-      "secret": "airlock-ci-secret",
+      "secret": "${AIRLOCK_KC_CLIENT_SECRET}",
       "publicClient": false,
       "standardFlowEnabled": false,
       "directAccessGrantsEnabled": true,
@@ -79,29 +79,45 @@
     {
       "username": "researcher-ci",
       "enabled": true,
+      "email": "researcher-ci@example.invalid",
+      "firstName": "Researcher",
+      "lastName": "CI",
       "emailVerified": true,
-      "credentials": [{"type": "password", "value": "researcher-pass", "temporary": false}],
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "${AIRLOCK_KC_RESEARCHER_PASSWORD}", "temporary": false}],
       "groups": ["/airlock-researcher"]
     },
     {
       "username": "reviewer-ci",
       "enabled": true,
+      "email": "reviewer-ci@example.invalid",
+      "firstName": "Reviewer",
+      "lastName": "CI",
       "emailVerified": true,
-      "credentials": [{"type": "password", "value": "reviewer-pass", "temporary": false}],
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "${AIRLOCK_KC_REVIEWER_PASSWORD}", "temporary": false}],
       "groups": ["/airlock-reviewer"]
     },
     {
       "username": "admin-ci",
       "enabled": true,
+      "email": "admin-ci@example.invalid",
+      "firstName": "Admin",
+      "lastName": "CI",
       "emailVerified": true,
-      "credentials": [{"type": "password", "value": "admin-pass", "temporary": false}],
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "${AIRLOCK_KC_ADMIN_PASSWORD}", "temporary": false}],
       "groups": ["/airlock-admin"]
     },
     {
       "username": "unmapped-ci",
       "enabled": true,
+      "email": "unmapped-ci@example.invalid",
+      "firstName": "Unmapped",
+      "lastName": "CI",
       "emailVerified": true,
-      "credentials": [{"type": "password", "value": "unmapped-pass", "temporary": false}]
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "${AIRLOCK_KC_UNMAPPED_PASSWORD}", "temporary": false}]
     }
   ]
 }
