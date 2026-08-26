@@ -1,0 +1,107 @@
+{
+  "realm": "airlock-ci",
+  "enabled": true,
+  "sslRequired": "none",
+  "registrationAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "groups": [
+    {"name": "airlock-researcher"},
+    {"name": "airlock-reviewer"},
+    {"name": "airlock-admin"}
+  ],
+  "clients": [
+    {
+      "clientId": "airlock-api",
+      "name": "Airlock API audience",
+      "enabled": true,
+      "bearerOnly": true,
+      "publicClient": false,
+      "protocol": "openid-connect"
+    },
+    {
+      "clientId": "airlock-backend",
+      "name": "Airlock backend CI client",
+      "enabled": true,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "airlock-ci-secret",
+      "publicClient": false,
+      "standardFlowEnabled": false,
+      "directAccessGrantsEnabled": true,
+      "serviceAccountsEnabled": false,
+      "protocol": "openid-connect",
+      "protocolMappers": [
+        {
+          "name": "airlock-groups",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-group-membership-mapper",
+          "consentRequired": false,
+          "config": {
+            "full.path": "false",
+            "claim.name": "groups",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "airlock-subject",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-property-mapper",
+          "consentRequired": false,
+          "config": {
+            "user.attribute": "username",
+            "claim.name": "airlock_subject",
+            "jsonType.label": "String",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "userinfo.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        },
+        {
+          "name": "airlock-api-audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "airlock-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "researcher-ci",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{"type": "password", "value": "researcher-pass", "temporary": false}],
+      "groups": ["/airlock-researcher"]
+    },
+    {
+      "username": "reviewer-ci",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{"type": "password", "value": "reviewer-pass", "temporary": false}],
+      "groups": ["/airlock-reviewer"]
+    },
+    {
+      "username": "admin-ci",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{"type": "password", "value": "admin-pass", "temporary": false}],
+      "groups": ["/airlock-admin"]
+    },
+    {
+      "username": "unmapped-ci",
+      "enabled": true,
+      "emailVerified": true,
+      "credentials": [{"type": "password", "value": "unmapped-pass", "temporary": false}]
+    }
+  ]
+}
