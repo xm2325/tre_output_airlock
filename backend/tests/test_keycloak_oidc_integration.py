@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import secrets
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,10 @@ BACKEND_ROOT = REPOSITORY_ROOT / "backend"
 REALM_PATH = REPOSITORY_ROOT / "infra" / "keycloak" / "airlock-ci-realm.json"
 KEYCLOAK_IMAGE = "quay.io/keycloak/keycloak:26.7.2"
 KEYCLOAK_PORT = 18081
+
+
+def _ephemeral_secret() -> str:
+    return secrets.token_urlsafe(24)
 
 
 def test_real_keycloak_oidc_introspection_and_authorisation(tmp_path: Path) -> None:
@@ -33,6 +38,12 @@ def test_real_keycloak_oidc_introspection_and_authorisation(tmp_path: Path) -> N
             "AIRLOCK_QUARANTINE_DIR": str(tmp_path / "quarantine"),
             "AIRLOCK_AUTO_CREATE_SCHEMA": "false",
             "AIRLOCK_KEYCLOAK_BASE_URL": f"http://127.0.0.1:{KEYCLOAK_PORT}",
+            "AIRLOCK_KC_CLIENT_SECRET": _ephemeral_secret(),
+            "AIRLOCK_KC_RESEARCHER_PASSWORD": _ephemeral_secret(),
+            "AIRLOCK_KC_REVIEWER_PASSWORD": _ephemeral_secret(),
+            "AIRLOCK_KC_ADMIN_PASSWORD": _ephemeral_secret(),
+            "AIRLOCK_KC_UNMAPPED_PASSWORD": _ephemeral_secret(),
+            "KC_BOOTSTRAP_ADMIN_PASSWORD": _ephemeral_secret(),
             "PYTHONPATH": str(BACKEND_ROOT),
         }
     )
@@ -48,7 +59,17 @@ def test_real_keycloak_oidc_introspection_and_authorisation(tmp_path: Path) -> N
         "-e",
         "KC_BOOTSTRAP_ADMIN_USERNAME=admin",
         "-e",
-        "KC_BOOTSTRAP_ADMIN_PASSWORD=airlock-admin-ci",
+        "KC_BOOTSTRAP_ADMIN_PASSWORD",
+        "-e",
+        "AIRLOCK_KC_CLIENT_SECRET",
+        "-e",
+        "AIRLOCK_KC_RESEARCHER_PASSWORD",
+        "-e",
+        "AIRLOCK_KC_REVIEWER_PASSWORD",
+        "-e",
+        "AIRLOCK_KC_ADMIN_PASSWORD",
+        "-e",
+        "AIRLOCK_KC_UNMAPPED_PASSWORD",
         "-v",
         f"{REALM_PATH}:/opt/keycloak/data/import/airlock-ci-realm.json:ro",
         KEYCLOAK_IMAGE,
