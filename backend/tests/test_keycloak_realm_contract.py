@@ -33,6 +33,10 @@ def test_keycloak_realm_fixture_preserves_identity_contract() -> None:
     assert mappers["airlock-groups"]["config"]["introspection.token.claim"] == "true"
     assert mappers["airlock-subject"]["config"]["claim.name"] == "airlock_subject"
     assert mappers["airlock-api-audience"]["config"]["included.client.audience"] == "airlock-api"
+    assert (
+        mappers["airlock-backend-audience"]["config"]["included.client.audience"]
+        == "airlock-backend"
+    )
 
     users = _by_key(realm["users"], "username")
     assert users["researcher-ci"]["groups"] == ["/airlock-researcher"]
